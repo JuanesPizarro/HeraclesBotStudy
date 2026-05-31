@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="theme-color" content="#09090b" />
+  <title>Heracles — Registro</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.0/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    input[type=number] { -moz-appearance: textfield; }
+    html { scroll-behavior: smooth; }
+  </style>
+</head>
+
+<body class="bg-zinc-950 text-zinc-100 min-h-screen antialiased">
+
+  <!-- Sin token -->
+  <div id="no-token" class="hidden min-h-screen flex items-center justify-center p-6">
+    <div class="max-w-xs w-full text-center space-y-5">
+      <div class="text-6xl">🏛️</div>
+      <h1 class="text-2xl font-bold">Heracles</h1>
+      <p class="text-zinc-400 text-sm">Pide tu enlace personal al bot:</p>
+      <div class="bg-zinc-900 rounded-xl px-4 py-3 font-mono text-indigo-400 text-sm border border-zinc-800">/webapp</div>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div x-data="workoutApp()" x-init="init()" x-cloak class="max-w-md mx-auto min-h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="px-4 pt-5 pb-3 flex items-start justify-between flex-shrink-0">
+      <div>
+        <h1 class="text-base font-bold text-zinc-100 tracking-tight">🏛️ Heracles</h1>
+        <p class="text-[11px] text-zinc-600 mt-0.5 capitalize" x-text="todayDate()"></p>
+      </div>
+      <div class="text-right" x-show="userName">
+        <p class="text-sm font-semibold text-zinc-200" x-text="userName"></p>
+        <p class="text-[11px] text-zinc-500 max-w-[160px] truncate" x-text="goal"></p>
+      </div>
+    </header>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex-1 flex items-center justify-center">
+      <div class="text-zinc-600 text-sm animate-pulse">Cargando sesión...</div>
+    </div>
+
+    <!-- ── DÍA DE DESCANSO ──────────────────────────────── -->
+    <div x-show="!loading && plan && plan.is_rest_day" class="flex-1 flex items-center justify-center px-6">
+      <div class="text-center space-y-5">
+        <div class="text-6xl">🌙</div>
+        <div>
+          <p class="text-xl font-bold text-zinc-200 capitalize" x-text="plan?.today_day + ' — día de descanso'"></p>
+          <p class="text-zinc-500 text-sm mt-1">El descanso es parte del entrenamiento.</p>
+        </div>
+        <template x-if="plan?.next_training_day">
+          <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-4">
+            <p class="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-1">Próximo entrenamiento</p>
+            <p class="text-zinc-200 font-semibold capitalize" x-text="plan.next_training_day"></p>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ── SESIÓN COMPLETADA ────────────────────────────── -->
+    <div x-show="!loading && sessionComplete" class="flex-1 flex flex-col items-center justify-center px-4 space-y-5">
+      <div class="text-5xl">🏆</div>
+      <div class="text-center">
+        <p class="text-xl font-bold text-emerald-400">¡Sesión completada!</p>
+        <p class="text-zinc-500 text-sm mt-1" x-text="plan?.day_name"></p>
+      </div>
+      <!-- Resumen por ejercicio -->
+      <div class="w-full space-y-3">
+        <template x-for="group in sessionGrouped" :key="group.exercise">
+          <div class="bg-zinc-900 rounded-xl p-3 border border-zinc-800">
+            <p class="text-xs font-semibold text-zinc-300 mb-1.5" x-text="group.exercise"></p>
+            <div class="space-y-1">
+              <template x-for="(set, i) in group.sets" :key="set.id">
+                <div class="flex items-center gap-2 text-xs">
+                  <span class="text-zinc-700 font-mono w-4" x-text="'S'+(i+1)"></span>
+                  <span class="text-zinc-300 flex-1">
+                    <span x-text="set.weight_kg === 0 ? 'PC' : set.weight_kg + 'kg'"></span>
+                    <span class="text-zinc-600"> × </span>
+                    <span x-text="set.reps"></span>
+                  </span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold" :class="rirBadgeColor(set.rir)"
+                        x-text="set.rir !== null ? 'RIR '+set.rir : ''"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+      <p class="text-zinc-600 text-xs" x-text="session.length + ' series registradas'"></p>
+    </div>
+
+    <!-- ── ENTRENAMIENTO ACTIVO ────────────────────────── -->
+    <div x-show="!loading && plan && !plan.is_rest_day && !sessionComplete" class="flex-1 flex flex-col px-4 space-y-3 pb-6">
+
+      <!-- Override banner -->
+      <template x-if="plan?.override">
+        <div class="bg-amber-950/50 border border-amber-800/50 rounded-xl px-3 py-2.5 flex gap-2">
+          <span class="text-amber-400 flex-shrink-0">⚠️</span>
+          <div class="min-w-0">
+            <p class="text-amber-300 text-xs font-semibold">Ajuste activo para hoy</p>
+            <p class="text-amber-400/80 text-[11px] leading-snug mt-0.5" x-text="plan.override.modification"></p>
+          </div>
+        </div>
+      </template>
+
+      <!-- Nombre del bloque + progreso -->
+      <div>
+        <p class="text-[10px] font-bold text-zinc-600 uppercase tracking-widest" x-text="plan?.day_name"></p>
+        <div class="mt-2 flex items-center gap-3">
+          <!-- Barra de progreso -->
+          <div class="flex-1 flex gap-1">
+            <template x-for="(ex, i) in (plan?.exercises || [])" :key="i">
+              <div class="flex-1 h-1.5 rounded-full transition-all duration-300"
+                   :class="i < currentExIdx ? 'bg-emerald-600' : i === currentExIdx ? 'bg-indigo-500' : 'bg-zinc-800'">
+              </div>
+            </template>
+          </div>
+          <span class="text-[11px] text-zinc-500 flex-shrink-0"
+                x-text="(currentExIdx+1) + '/' + (plan?.exercises?.length || 0)"></span>
+        </div>
+      </div>
+
+      <!-- Card ejercicio actual -->
+      <div class="bg-zinc-900 rounded-2xl p-4 border border-zinc-800 space-y-4">
+
+        <!-- Nombre y nota -->
+        <div>
+          <p class="text-base font-bold text-zinc-100 leading-snug" x-text="currentExercise?.name"></p>
+          <template x-if="currentExercise?.note">
+            <p class="text-[11px] text-zinc-500 italic mt-1 leading-snug" x-text="currentExercise.note"></p>
+          </template>
+          <!-- Objetivo + serie actual -->
+          <div class="flex items-center gap-2 mt-2">
+            <span class="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">Objetivo</span>
+            <span class="text-xs text-indigo-400 font-semibold"
+                  x-text="currentExercise?.target_sets + ' series × ' + currentExercise?.target_reps + ' reps'"></span>
+            <div class="flex-1"></div>
+            <span class="px-2 py-0.5 bg-indigo-950 text-indigo-400 text-xs font-bold rounded-lg border border-indigo-900"
+                  x-text="'Serie ' + (setsCompleted+1) + ' de ' + currentExercise?.target_sets"></span>
+          </div>
+        </div>
+
+        <!-- Peso + Reps -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Peso (kg)</label>
+            <div class="mt-1.5 flex gap-1 items-center">
+              <button @click="weight = Math.max(0, (parseFloat(weight)||0) - 2.5).toString()"
+                      class="w-10 h-11 flex-shrink-0 bg-zinc-800 rounded-xl text-zinc-400 text-xl font-bold hover:bg-zinc-700 active:scale-95 transition-all">−</button>
+              <input x-model="weight" type="number" min="0" step="0.5" placeholder="0"
+                     class="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 rounded-xl px-2 py-2.5 text-center text-sm font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+              <button @click="weight = ((parseFloat(weight)||0) + 2.5).toFixed(1)"
+                      class="w-10 h-11 flex-shrink-0 bg-zinc-800 rounded-xl text-zinc-400 text-xl font-bold hover:bg-zinc-700 active:scale-95 transition-all">+</button>
+            </div>
+            <p class="text-[10px] text-zinc-700 mt-1 text-center">0 = peso corporal</p>
+          </div>
+          <div>
+            <label class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Reps</label>
+            <div class="mt-1.5 flex gap-1 items-center">
+              <button @click="reps = Math.max(1, (parseInt(reps)||0) - 1).toString()"
+                      class="w-10 h-11 flex-shrink-0 bg-zinc-800 rounded-xl text-zinc-400 text-xl font-bold hover:bg-zinc-700 active:scale-95 transition-all">−</button>
+              <input x-model="reps" type="number" min="1" placeholder="0"
+                     class="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 rounded-xl px-2 py-2.5 text-center text-sm font-bold text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+              <button @click="reps = ((parseInt(reps)||0) + 1).toString()"
+                      class="w-10 h-11 flex-shrink-0 bg-zinc-800 rounded-xl text-zinc-400 text-xl font-bold hover:bg-zinc-700 active:scale-95 transition-all">+</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIR -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">RIR — Esfuerzo</label>
+            <span class="text-[11px] text-zinc-500" x-text="rirLabel(rir)"></span>
+          </div>
+          <div class="flex gap-1.5">
+            <template x-for="n in [0,1,2,3,4,5]" :key="n">
+              <button @click="rir = n"
+                      class="flex-1 h-10 rounded-xl text-sm font-bold transition-all active:scale-95"
+                      :class="rir === n ? rirActiveColor(n) : 'bg-zinc-800 text-zinc-600 hover:text-zinc-300'"
+                      x-text="n"></button>
+            </template>
+          </div>
+          <div class="flex justify-between mt-1">
+            <span class="text-[9px] text-rose-600 font-medium">Fallo</span>
+            <span class="text-[9px] text-emerald-600 font-medium">Fácil</span>
+          </div>
+        </div>
+
+        <!-- Notas -->
+        <input x-model="notes" type="text" placeholder="Notas opcionales (sensaciones, ajustes...)"
+               class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+               @keydown.enter="saveSet()" />
+
+        <!-- Error -->
+        <p x-show="error" x-text="error" class="text-rose-400 text-xs" x-cloak></p>
+
+        <!-- Guardar -->
+        <button @click="saveSet()" :disabled="loading"
+                class="w-full py-3.5 rounded-xl font-bold text-sm transition-all active:scale-[0.98] disabled:opacity-50"
+                :class="saveSuccess ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'"
+                x-text="saveSuccess ? '✅ Serie guardada' : loading ? 'Guardando...' : '💾 Guardar Serie'">
+        </button>
+      </div>
+
+      <!-- Timer -->
+      <div class="bg-zinc-900 rounded-2xl p-4 border border-zinc-800">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Descanso</span>
+          <div class="flex items-center gap-2">
+            <button @click="adjustTimer(-30)"
+                    class="w-6 h-6 rounded-full bg-zinc-800 text-zinc-500 text-sm hover:bg-zinc-700">−</button>
+            <span class="text-[11px] text-zinc-500 font-mono w-10 text-center" x-text="fmtSecs(timerSeconds)"></span>
+            <button @click="adjustTimer(30)"
+                    class="w-6 h-6 rounded-full bg-zinc-800 text-zinc-500 text-sm hover:bg-zinc-700">+</button>
+          </div>
+        </div>
+        <div class="text-center">
+          <div class="text-5xl font-mono font-bold tracking-tight transition-colors duration-500"
+               :class="timerDone ? 'text-emerald-400' : timerActive ? 'text-indigo-400' : 'text-zinc-700'"
+               x-text="timerDisplay"></div>
+        </div>
+        <div class="mt-3 h-1 bg-zinc-800 rounded-full overflow-hidden">
+          <div class="h-full rounded-full transition-all duration-1000 ease-linear"
+               :class="timerDone ? 'bg-emerald-500' : 'bg-indigo-600'"
+               :style="`width: ${timerProgress}%`"></div>
+        </div>
+        <div class="flex gap-2 mt-3">
+          <button @click="timerActive ? stopTimer() : startTimer()"
+                  class="flex-1 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95"
+                  :class="timerActive ? 'bg-zinc-800 text-zinc-300' : 'bg-indigo-600 text-white hover:bg-indigo-500'"
+                  x-text="timerActive ? '⏹ Pausar' : (timerDone ? '🔄 Repetir' : '▶ Iniciar')">
+          </button>
+          <button @click="resetTimer()" class="px-3 py-2 rounded-xl bg-zinc-800 text-zinc-500 text-xs hover:bg-zinc-700">↺</button>
+        </div>
+      </div>
+
+      <!-- Sets del ejercicio actual -->
+      <div x-show="setsForCurrentEx.length > 0" class="bg-zinc-900 rounded-2xl p-3 border border-zinc-800">
+        <p class="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">
+          Series de <span x-text="currentExercise?.name"></span>
+        </p>
+        <div class="space-y-1.5">
+          <template x-for="(set, i) in setsForCurrentEx" :key="set.id">
+            <div class="flex items-center gap-3 text-sm">
+              <span class="text-[11px] text-zinc-700 font-mono w-5" x-text="'S'+(i+1)"></span>
+              <span class="flex-1 text-zinc-300">
+                <span class="font-semibold" x-text="set.weight_kg === 0 ? 'PC' : set.weight_kg+'kg'"></span>
+                <span class="text-zinc-600"> × </span>
+                <span x-text="set.reps"></span>
+              </span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded font-semibold" :class="rirBadgeColor(set.rir)"
+                    x-text="set.rir !== null ? 'RIR '+set.rir : ''"></span>
+            </div>
+            <template x-if="set.notes">
+              <p class="text-[11px] text-zinc-600 italic ml-8 -mt-1" x-text="set.notes"></p>
+            </template>
+          </template>
+        </div>
+      </div>
+
+      <!-- Siguiente / Terminar -->
+      <template x-if="targetMet">
+        <div class="space-y-2">
+          <button @click="nextExercise()"
+                  class="w-full py-3.5 rounded-xl font-bold text-sm bg-emerald-700 hover:bg-emerald-600 text-white transition-all active:scale-[0.98]"
+                  x-text="isLastExercise ? '✓ Terminar sesión' : 'Siguiente ejercicio →'">
+          </button>
+          <p class="text-center text-[11px] text-zinc-600">
+            Puedes seguir añadiendo series antes de avanzar
+          </p>
+        </div>
+      </template>
+
+      <!-- Saltar ejercicio (siempre disponible, menos prominente) -->
+      <template x-if="!isLastExercise && !targetMet">
+        <button @click="skipExercise()"
+                class="w-full py-2.5 rounded-xl text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
+          Saltar este ejercicio →
+        </button>
+      </template>
+
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      if (!new URLSearchParams(window.location.search).get('token'))
+        document.getElementById('no-token').classList.remove('hidden');
+    })();
+
+    function workoutApp() {
+      return {
+        // ── Auth & perfil ───────────────────────────
+        token: new URLSearchParams(window.location.search).get('token') || '',
+        userName: '',
+        goal: '',
+
+        // ── Plan y estado de sesión ─────────────────
+        plan: null,
+        currentExIdx: 0,
+        session: [],
+        sessionComplete: false,
+
+        // ── Formulario de serie ─────────────────────
+        weight: '',
+        reps: '',
+        rir: 2,
+        notes: '',
+
+        // ── UI ─────────────────────────────────────
+        loading: true,
+        saveSuccess: false,
+        error: '',
+
+        // ── Cronómetro ──────────────────────────────
+        timerSeconds: 120,
+        timerRemaining: 120,
+        timerTotal: 120,
+        timerActive: false,
+        timerDone: false,
+        _timerInterval: null,
+
+        // ── Computed ────────────────────────────────
+
+        get currentExercise() {
+          return this.plan?.exercises?.[this.currentExIdx] ?? null;
+        },
+
+        get isLastExercise() {
+          return this.currentExIdx >= (this.plan?.exercises?.length ?? 0) - 1;
+        },
+
+        get setsForCurrentEx() {
+          const name = this.currentExercise?.name;
+          if (!name) return [];
+          return this.session.filter(s => s.exercise === name);
+        },
+
+        get setsCompleted() {
+          return this.setsForCurrentEx.length;
+        },
+
+        get targetMet() {
+          return this.setsCompleted >= (this.currentExercise?.target_sets ?? 99);
+        },
+
+        get sessionGrouped() {
+          const map = {};
+          for (const set of this.session) {
+            if (!map[set.exercise]) map[set.exercise] = { exercise: set.exercise, sets: [] };
+            map[set.exercise].sets.push(set);
+          }
+          return Object.values(map);
+        },
+
+        get timerDisplay() {
+          const m = Math.floor(this.timerRemaining / 60);
+          const s = this.timerRemaining % 60;
+          return `${m}:${String(s).padStart(2, '0')}`;
+        },
+
+        get timerProgress() {
+          if (!this.timerTotal) return 0;
+          return ((this.timerTotal - this.timerRemaining) / this.timerTotal) * 100;
+        },
+
+        // ── Init ────────────────────────────────────
+
+        async init() {
+          if (!this.token) return;
+          await Promise.all([this.fetchProfile(), this.fetchPlan(), this.fetchSession()]);
+          this.loading = false;
+          if (this.plan && !this.plan.is_rest_day) {
+            this._loadExercise(0);
+          }
+        },
+
+        async fetchProfile() {
+          try {
+            const res = await fetch(`/api/session/me?token=${this.token}`);
+            if (res.ok) {
+              const d = await res.json();
+              this.userName = d.name || '';
+              this.goal = d.goal || '';
+            }
+          } catch (_) {}
+        },
+
+        async fetchPlan() {
+          try {
+            const res = await fetch(`/api/session/plan?token=${this.token}`);
+            this.plan = res.ok ? await res.json() : null;
+          } catch (_) { this.plan = null; }
+        },
+
+        async fetchSession() {
+          try {
+            const res = await fetch(`/api/session/today?token=${this.token}`);
+            this.session = res.ok ? await res.json() : [];
+          } catch (_) { this.session = []; }
+        },
+
+        // ── Cargar ejercicio ─────────────────────────
+
+        _loadExercise(idx) {
+          this.currentExIdx = idx;
+          const ex = this.plan?.exercises?.[idx];
+          if (!ex) return;
+          // Pre-llenar peso con historial y reps con objetivo máximo
+          this.weight = ex.suggested_weight > 0 ? String(ex.suggested_weight) : '';
+          this.reps   = ex.reps_max ? String(ex.reps_max) : '';
+          this.rir    = 2;
+          this.notes  = '';
+          this.error  = '';
+          // Configurar timer para este ejercicio
+          this.timerSeconds  = ex.suggested_rest;
+          this.timerRemaining = ex.suggested_rest;
+          this.timerTotal    = ex.suggested_rest;
+          this.timerActive   = false;
+          this.timerDone     = false;
+          clearInterval(this._timerInterval);
+        },
+
+        // ── Guardar serie ────────────────────────────
+
+        async saveSet() {
+          if (!this.reps || parseInt(this.reps) < 1) {
+            this.error = 'Indica cuántas repeticiones hiciste';
+            return;
+          }
+          const exercise = this.currentExercise?.name;
+          if (!exercise) { this.error = 'No hay ejercicio seleccionado'; return; }
+
+          this.loading = true;
+          this.error = '';
+          try {
+            const res = await fetch('/api/session/set', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                token: this.token,
+                exercise,
+                reps: parseInt(this.reps),
+                weight_kg: parseFloat(this.weight) || 0,
+                rir: this.rir,
+                notes: this.notes.trim() || null,
+              }),
+            });
+            if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+            const saved = await res.json();
+            this.session.push(saved);
+
+            // Actualizar peso sugerido para la próxima serie con el que se acaba de usar
+            if (this.currentExercise) {
+              this.currentExercise.suggested_weight = parseFloat(this.weight) || 0;
+            }
+
+            this.notes = '';
+            this.rir   = 2;
+            this.saveSuccess = true;
+            setTimeout(() => this.saveSuccess = false, 2000);
+            this.startTimer();
+
+          } catch (e) {
+            this.error = e.message || '❌ Error al guardar. Intenta de nuevo.';
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        // ── Navegar ejercicios ───────────────────────
+
+        nextExercise() {
+          if (this.isLastExercise) {
+            this.finishSession();
+            return;
+          }
+          this._loadExercise(this.currentExIdx + 1);
+        },
+
+        skipExercise() {
+          if (!this.isLastExercise) this._loadExercise(this.currentExIdx + 1);
+          else this.finishSession();
+        },
+
+        finishSession() {
+          clearInterval(this._timerInterval);
+          this.sessionComplete = true;
+        },
+
+        // ── Cronómetro ───────────────────────────────
+
+        startTimer() {
+          this.timerTotal     = this.timerSeconds;
+          this.timerRemaining = this.timerSeconds;
+          this.timerActive    = true;
+          this.timerDone      = false;
+          clearInterval(this._timerInterval);
+          this._timerInterval = setInterval(() => {
+            if (this.timerRemaining > 0) {
+              this.timerRemaining--;
+            } else {
+              this.timerActive = false;
+              this.timerDone   = true;
+              clearInterval(this._timerInterval);
+              this.playBeep();
+            }
+          }, 1000);
+        },
+
+        stopTimer() { clearInterval(this._timerInterval); this.timerActive = false; },
+
+        resetTimer() {
+          clearInterval(this._timerInterval);
+          this.timerActive    = false;
+          this.timerDone      = false;
+          this.timerTotal     = this.timerSeconds;
+          this.timerRemaining = this.timerSeconds;
+        },
+
+        adjustTimer(delta) {
+          this.timerSeconds = Math.max(30, Math.min(600, this.timerSeconds + delta));
+          if (!this.timerActive) {
+            this.timerTotal     = this.timerSeconds;
+            this.timerRemaining = this.timerSeconds;
+          }
+        },
+
+        fmtSecs(s) {
+          return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+        },
+
+        playBeep() {
+          try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            [0, 0.35, 0.7].forEach(offset => {
+              const osc = ctx.createOscillator(), gain = ctx.createGain();
+              osc.connect(gain); gain.connect(ctx.destination);
+              osc.frequency.value = 880; osc.type = 'sine';
+              gain.gain.setValueAtTime(0.25, ctx.currentTime + offset);
+              gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + offset + 0.3);
+              osc.start(ctx.currentTime + offset);
+              osc.stop(ctx.currentTime + offset + 0.35);
+            });
+          } catch (_) {}
+        },
+
+        // ── Helpers UI ───────────────────────────────
+
+        rirLabel(n) {
+          return ['Fallo (RPE 10)', '1 rep en recámara (RPE 9)', '2 reps (RPE 8)',
+                  '3 reps (RPE 7)', '4 reps', '5+ reps (fácil)'][n] || '';
+        },
+
+        rirActiveColor(n) {
+          return ['bg-rose-600 text-white', 'bg-orange-500 text-white',
+                  'bg-amber-400 text-zinc-900', 'bg-yellow-300 text-zinc-900',
+                  'bg-emerald-500 text-white', 'bg-emerald-700 text-white'][n] || 'bg-zinc-700';
+        },
+
+        rirBadgeColor(n) {
+          if (n === null || n === undefined) return '';
+          return ['bg-rose-950 text-rose-400', 'bg-orange-950 text-orange-400',
+                  'bg-amber-950 text-amber-400', 'bg-yellow-950 text-yellow-400',
+                  'bg-emerald-950 text-emerald-400', 'bg-emerald-950 text-emerald-500'][n] || 'bg-zinc-800 text-zinc-500';
+        },
+
+        todayDate() {
+          return new Date().toLocaleDateString('es-ES', {
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+          });
+        },
+      };
+    }
+  </script>
+</body>
+</html>

@@ -14,8 +14,15 @@ from bot.storage.user_store import UserStore
 #   5. El resultado vuelve al LLM como un ToolMessage
 #   6. El LLM usa ese resultado para formular su respuesta final
 #
-# Este es el patrón ReAct (Reasoning + Acting):
-# "El agente razona y actúa alternando entre pensar y usar herramientas"
+# [CONCEPTO: Principio de mínimos tools — clave para SaaS]
+# Solo registramos tools para operaciones de ESCRITURA que el LLM
+# debe decidir cuándo ejecutar. Las operaciones de LECTURA (perfil,
+# rutina, historial) se inyectan en el system prompt ANTES de llamar
+# al LLM — así el LLM ya tiene todo el contexto en la primera llamada
+# y no necesita "pedir" datos con tool calls extra.
+#
+# Regla: tool = acción con efecto secundario decidida por el LLM
+#         contexto = datos que el código inyecta sin involucrar al LLM
 #
 # Aprende más:
 # - Paper: "ReAct: Synergizing Reasoning and Acting in Language Models" (2022)
@@ -54,91 +61,6 @@ def save_workout(
 
 
 @tool
-def get_recent_workouts(user_id: str, limit: int = 5) -> str:
-    """
-    Recupera el historial reciente de entrenamientos del usuario.
-    Úsala cuando necesites ver qué ejercicios hizo el usuario para
-    sugerir progresión de cargas o revisar su historial.
-
-    Args:
-        user_id: ID de Telegram del usuario
-        limit: Cuántos registros mostrar (entre 1 y 10)
-    """
-    workouts = _store.get_recent_workouts(user_id, min(limit, 10))
-
-    if not workouts:
-        return "El usuario no tiene entrenamientos registrados todavía."
-
-    lines = ["Historial reciente de entrenamientos:"]
-    for w in workouts:
-        date = w["logged_at"][:10]  # Solo la fecha (YYYY-MM-DD)
-        lines.append(
-            f"  • {w['exercise']}: {w['sets']}x{w['reps']} @ {w['weight_kg']}kg  [{date}]"
-        )
-    return "\n".join(lines)
-
-
-@tool
-def get_user_profile(user_id: str) -> str:
-    """
-    Obtiene el perfil completo de entrenamiento del usuario.
-    Úsala SIEMPRE antes de generar una rutina o recomendación personalizada.
-    El perfil contiene toda la información necesaria para tomar decisiones:
-    disponibilidad, equipamiento, nivel, limitaciones físicas y objetivo.
-
-    Args:
-        user_id: ID de Telegram del usuario
-    """
-    # [CONCEPTO: Docstrings como instrucciones para el LLM]
-    # El LLM lee este texto para decidir cuándo invocar el tool.
-    # "SIEMPRE antes de generar una rutina" le da una regla clara y explícita.
-    user = _store.get_user(user_id)
-    if not user:
-        return "Usuario no encontrado."
-
-    if not user.get("onboarding_done"):
-        return (
-            f"Nombre: {user['name']}\n"
-            "Perfil incompleto: el usuario no ha completado el onboarding. "
-            "Pídele que envíe /start para configurar su perfil antes de generar una rutina."
-        )
-
-    # Construir la línea de equipamiento dejando explícito que la lista es exhaustiva.
-    # Si el usuario entrena en casa, el detalle es la única fuente de verdad —
-    # cualquier implemento no mencionado debe asumirse como NO disponible.
-    if user["equipment"] == "casa con material" and user.get("home_equipment_detail"):
-        equipment_line = (
-            f"casa con material.\n"
-            f"  ⚠️  SOLO cuenta con los siguientes implementos "
-            f"(no asumir ningún otro):\n"
-            f"  {user['home_equipment_detail']}"
-        )
-    elif user["equipment"] == "casa con material":
-        equipment_line = "casa con material (sin detalle registrado)"
-    else:
-        equipment_line = user["equipment"]
-
-    limitations = user.get("limitations") or "ninguna"
-
-    return (
-        f"=== PERFIL DE ENTRENAMIENTO ===\n"
-        f"Nombre: {user['name']}\n"
-        f"\n--- Logística ---\n"
-        f"Días/semana disponibles: {user['days_per_week']}\n"
-        f"Tiempo por sesión: {user['session_time_minutes']} minutos\n"
-        f"Equipamiento: {equipment_line}\n"
-        f"\n--- Perfil físico ---\n"
-        f"Nivel de experiencia: {user['experience_level']}\n"
-        f"Actividad diaria: {user['daily_activity']}\n"
-        f"Lesiones / limitaciones: {limitations}\n"
-        f"\n--- Objetivo ---\n"
-        f"Meta principal: {user['goal']}\n"
-        f"Prueba de nivel solicitada: {'sí' if user.get('level_test_requested') else 'no'}\n"
-        f"==============================="
-    )
-
-
-@tool
 def update_goal(user_id: str, new_goal: str) -> str:
     """
     Actualiza el objetivo de entrenamiento del usuario.
@@ -153,8 +75,49 @@ def update_goal(user_id: str, new_goal: str) -> str:
     return f"Objetivo actualizado: {new_goal}"
 
 
-# [CONCEPTO: Lista de tools que le pasamos al LLM]
-# Agrupamos todos los tools en una lista para pasarlos al modelo.
-# LangChain convierte cada @tool en un JSON Schema que el LLM entiende.
-# En proyectos grandes, organiza los tools por dominio (workout_tools, nutrition_tools, etc.)
-TOOLS = [save_workout, get_recent_workouts, get_user_profile, update_goal]
+@tool
+def log_session_override(
+    user_id: str,
+    target_date: str,
+    modification: str,
+    scope: str,
+    reason: str,
+) -> str:
+    """
+    Registra una modificación TEMPORAL a la sesión de entrenamiento de una fecha específica.
+    NO modifica la rutina general — solo crea una excepción para esa fecha.
+
+    Úsala cuando el usuario mencione un cambio que NO es permanente:
+    - Actividad extra ese día (fútbol, partido, caminata larga...)
+    - Molestia o dolor puntual
+    - Falta de equipamiento ese día
+    - Cambio de día de entrenamiento esa semana
+
+    Args:
+        user_id: ID de Telegram del usuario
+        target_date: Fecha afectada en formato YYYY-MM-DD (ej: "2026-06-03")
+        modification: Descripción concreta del ajuste para esa sesión
+                      (ej: "Reducir volumen piernas al 50%. Cambiar sentadilla por peso muerto ligero.
+                            Agregar 10 min de movilidad de cadera post-sesión.")
+        scope: "day" = solo ese día | "week" = toda esa semana
+        reason: Motivo breve (ej: "fútbol martes tarde", "dolor rodilla izquierda")
+    """
+    override_id = _store.save_session_override(
+        user_id=user_id,
+        target_date=target_date,
+        scope=scope,
+        modification=modification,
+        reason=reason,
+    )
+    return (
+        f"Modificación registrada para {target_date} (alcance: {scope}).\n"
+        f"Ajuste: {modification}\n"
+        f"Motivo: {reason}\n"
+        f"ID: {override_id}"
+    )
+
+
+# [CONCEPTO: Lista de tools mínima]
+# 3 tools — todos de escritura. Las lecturas (perfil, rutina, historial,
+# overrides activos) se inyectan en el system prompt sin costo extra.
+TOOLS = [save_workout, update_goal, log_session_override]

@@ -23,6 +23,10 @@ class Settings:
     WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "changeme")
     PORT: int = int(os.getenv("PORT", "8000"))
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "data/heracles.db")
+    # URL pública del servidor (usada para generar el enlace /webapp en Telegram)
+    # Con Cloudflare Tunnel: https://tu-dominio.com
+    # Sin dominio (solo local): http://localhost:8000
+    WEB_URL: str = os.getenv("WEB_URL", f"http://localhost:{os.getenv('PORT', '8000')}")
 
     def validate(self) -> None:
         """Valida que las variables críticas estén presentes antes de arrancar."""

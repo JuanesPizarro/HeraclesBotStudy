@@ -67,16 +67,55 @@ _store = UserStore()
     ASK_LEVEL_TEST,
 ) = range(9)
 
-# ── Mapas callback_data → valor de negocio ────────────────────────────
-# Separar la llave interna (callback_data) del valor guardado en DB
-# permite cambiar el texto del botón sin tocar la lógica de negocio.
+# ── Días de la semana ─────────────────────────────────────────────────
+# Usamos claves ASCII en callback_data (máx 64 bytes, sin tildes)
+# pero guardamos el nombre completo en español en la DB.
+#
+# [CONCEPTO: Multi-select con InlineKeyboard]
+# Los botones normales de Telegram son single-select (cada tap avanza).
+# Para multi-select usamos context.user_data como estado intermedio:
+#   1. El usuario toca días → toggleamos en context.user_data["selected_days"]
+#   2. Reconstruimos el teclado con ✅ en los seleccionados
+#   3. Un botón "Confirmar" finaliza la selección y avanza al siguiente paso
+DAYS_ORDER = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
-DAYS_MAP: dict[str, int] = {
-    "days_2": 2,
-    "days_3": 3,
-    "days_4": 4,
-    "days_5": 5,
+# callback_data → nombre completo (ASCII key, valor con tilde)
+DAYS_CALLBACK: dict[str, str] = {
+    "day_lun": "lunes",
+    "day_mar": "martes",
+    "day_mie": "miércoles",
+    "day_jue": "jueves",
+    "day_vie": "viernes",
+    "day_sab": "sábado",
+    "day_dom": "domingo",
 }
+# Inverso para toggle
+DAYS_CALLBACK_BY_NAME: dict[str, str] = {v: k for k, v in DAYS_CALLBACK.items()}
+
+
+def _build_days_keyboard(selected: set[str]) -> InlineKeyboardMarkup:
+    """
+    Construye el teclado de días con checkmarks en los seleccionados.
+    Se llama cada vez que el usuario toca un día para reconstruirlo.
+
+    [CONCEPTO: UI reactiva sin framework]
+    En lugar de un framework (React, Vue), Alpine.js o similar, usamos
+    query.edit_message_reply_markup() para actualizar el teclado in-place.
+    El estado vive en context.user_data (lado servidor), no en el cliente.
+    """
+    rows = []
+    pairs = list(DAYS_CALLBACK.items())
+    for i in range(0, len(pairs), 2):
+        row = []
+        for cb, name in pairs[i:i + 2]:
+            label = f"✅ {name.capitalize()}" if name in selected else name.capitalize()
+            row.append(InlineKeyboardButton(label, callback_data=cb))
+        rows.append(row)
+    count = len(selected)
+    confirm_label = f"Confirmar ({count} día{'s' if count != 1 else ''})" if count else "Selecciona al menos 2 días"
+    rows.append([InlineKeyboardButton(confirm_label, callback_data="days_confirm")])
+    return InlineKeyboardMarkup(rows)
+
 
 SESSION_TIME_MAP: dict[str, int] = {
     "time_30": 30,
@@ -115,17 +154,6 @@ GOAL_MAP: dict[str, str] = {
 }
 
 # ── Teclados inline ───────────────────────────────────────────────────
-
-DAYS_KEYBOARD = InlineKeyboardMarkup([
-    [
-        InlineKeyboardButton("2 días", callback_data="days_2"),
-        InlineKeyboardButton("3 días", callback_data="days_3"),
-    ],
-    [
-        InlineKeyboardButton("4 días", callback_data="days_4"),
-        InlineKeyboardButton("5+ días", callback_data="days_5"),
-    ],
-])
 
 SESSION_TIME_KEYBOARD = InlineKeyboardMarkup([
     [InlineKeyboardButton("⚡ 30 minutos (express)",   callback_data="time_30")],
@@ -187,14 +215,15 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Vamos a repasar *4 puntos clave* — solo toma un par de minutos ⚡",
         parse_mode="Markdown",
     )
+    context.user_data["selected_days"] = []  # Inicializar selección vacía
     await update.message.reply_text(
         "─────────────────────────\n"
         "*📦 Sección 1 de 4 — Logística y disponibilidad*\n"
         "─────────────────────────\n\n"
-        "1️⃣  ¿Cuántos *días a la semana* vas a entrenar?\n\n"
-        "_Sé realista: mejor cumplir 3 días que planificar 6 y fallar 3._",
+        "1️⃣  ¿*Qué días de la semana* puedes entrenar?\n\n"
+        "_Toca los días y luego confirma. Sé realista: mejor cumplir 3 que planificar 6 y fallar 3._",
         parse_mode="Markdown",
-        reply_markup=DAYS_KEYBOARD,
+        reply_markup=_build_days_keyboard(set()),
     )
     return ASK_DAYS
 
@@ -203,18 +232,49 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # Sección 1 — Logística
 # ─────────────────────────────────────────────────────────────────────
 
-async def received_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # [CONCEPTO: callback_query — protocolo de 3 pasos]
-    # 1. query.answer()            → quita el spinner del botón (obligatorio)
-    # 2. query.edit_message_text() → confirma la elección en el mismo mensaje
-    # 3. send_message()            → lanza la siguiente pregunta
+async def toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Alterna la selección de un día. Reconstruye el teclado con el nuevo estado.
+
+    [CONCEPTO: callback_query.edit_message_reply_markup]
+    A diferencia de edit_message_text (que reescribe todo el mensaje),
+    edit_message_reply_markup solo actualiza los botones. Más eficiente
+    y preserva el texto original.
+    """
     query = update.callback_query
     await query.answer()
 
-    context.user_data["days_per_week"] = DAYS_MAP[query.data]
+    day_name = DAYS_CALLBACK[query.data]
+    selected = set(context.user_data.get("selected_days", []))
 
+    if day_name in selected:
+        selected.discard(day_name)
+    else:
+        selected.add(day_name)
+    context.user_data["selected_days"] = list(selected)
+
+    await query.edit_message_reply_markup(reply_markup=_build_days_keyboard(selected))
+    return ASK_DAYS  # Permanece en el mismo estado hasta que confirme
+
+
+async def confirm_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Valida la selección (mínimo 2 días) y avanza al paso de tiempo de sesión."""
+    query = update.callback_query
+    selected = set(context.user_data.get("selected_days", []))
+
+    if len(selected) < 2:
+        await query.answer("Selecciona al menos 2 días para continuar", show_alert=True)
+        return ASK_DAYS
+
+    await query.answer()
+
+    # Ordenar según el orden natural de la semana
+    days_sorted = [d for d in DAYS_ORDER if d in selected]
+    context.user_data["training_days"] = ",".join(days_sorted)
+
+    days_label = " • ".join(d.capitalize() for d in days_sorted)
     await query.edit_message_text(
-        f"1️⃣  Días/semana: *{DAYS_MAP[query.data]}* ✅",
+        f"1️⃣  Días de entrenamiento: *{days_label}* ✅",
         parse_mode="Markdown",
     )
     await context.bot.send_message(
@@ -425,7 +485,7 @@ async def received_level_test(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     _store.save_onboarding(
         telegram_id=user_id,
-        days_per_week=context.user_data["days_per_week"],
+        training_days=context.user_data["training_days"],
         session_time_minutes=context.user_data["session_time_minutes"],
         equipment=context.user_data["equipment"],
         home_equipment_detail=context.user_data.get("home_equipment_detail"),
@@ -491,11 +551,18 @@ def build_onboarding_handler() -> ConversationHandler:
     reinicia el flujo en lugar de ignorar el comando.
     Esto evita que el usuario quede atrapado si cambia de opinión a mitad.
     """
+    # [CONCEPTO: per_message=False en ConversationHandler]
+    # Con per_message=False (default), el estado de la conversación se rastrea
+    # por chat_id (y opcionalmente user_id), no por cada mensaje individual.
+    # Es el comportamiento correcto para onboarding: un flujo por usuario,
+    # no uno por mensaje. per_message=True se usa en conversaciones donde
+    # múltiples flujos paralelos pueden estar activos simultáneamente.
     return ConversationHandler(
         entry_points=[CommandHandler("start", start_onboarding)],
         states={
             ASK_DAYS: [
-                CallbackQueryHandler(received_days, pattern="^days_"),
+                CallbackQueryHandler(toggle_day, pattern="^day_(?!s_)"),  # day_lun, day_mar... (no days_confirm)
+                CallbackQueryHandler(confirm_days, pattern="^days_confirm$"),
             ],
             ASK_SESSION_TIME: [
                 CallbackQueryHandler(received_session_time, pattern="^time_"),
@@ -526,4 +593,5 @@ def build_onboarding_handler() -> ConversationHandler:
             MessageHandler(filters.TEXT & ~filters.COMMAND, onboarding_fallback),
         ],
         allow_reentry=True,
+        per_message=False,
     )

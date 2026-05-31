@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from bot.config import settings
 from bot.handlers.telegram import create_telegram_app
 from bot.handlers.n8n_webhook import router as n8n_router
+from bot.handlers.web_api import router as web_router
 
 # =====================================================================
 # [CONCEPTO: FastAPI]
@@ -33,6 +34,7 @@ app = FastAPI(
 
 # Registrar los routers
 app.include_router(n8n_router)
+app.include_router(web_router)
 
 
 @app.get("/health")
