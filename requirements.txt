@@ -1,0 +1,40 @@
+# =====================================================================
+# DEPENDENCIAS DEL PROYECTO
+#
+# [CONCEPTO: Gestión de dependencias en Python]
+# requirements.txt lista las librerías necesarias.
+# Instalar con: pip install -r requirements.txt
+#
+# Para proyectos serios, considera:
+# - pip-tools (para lockfile con hashes de seguridad)
+# - Poetry o uv (gestores modernos con resolución de dependencias)
+# Aprende más: "python dependency management best practices"
+# =====================================================================
+
+# Bot de Telegram (v20+ es completamente async/await)
+python-telegram-bot>=21.0
+
+# LangChain: abstracción sobre LLMs, tools, prompts
+# Aprende más: https://python.langchain.com/docs/introduction/
+langchain>=0.3.0
+
+# LangGraph: agentes como grafos de estado (el skill más demandado en AI eng)
+# Aprende más: https://langchain-ai.github.io/langgraph/
+langgraph>=0.2.0
+
+# Cliente OpenAI compatible — sirve para DeepSeek, Azure OpenAI, etc.
+langchain-openai>=0.2.0
+
+# Framework web async — el más popular en Python actualmente
+# Aprende más: https://fastapi.tiangolo.com/
+fastapi>=0.115.0
+
+# Servidor ASGI para FastAPI (como Nginx pero en Python)
+uvicorn[standard]>=0.32.0
+
+# Carga variables de entorno desde el archivo .env
+python-dotenv>=1.0.0
+
+# Pydantic v2 — validación de datos con type hints (FastAPI lo usa internamente)
+# Aprende más: https://docs.pydantic.dev/
+pydantic>=2.0

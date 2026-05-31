@@ -1,0 +1,33 @@
+# Credenciales — NUNCA al repositorio
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Base de datos local
+data/
+*.db
+*.sqlite
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# n8n (datos locales del contenedor)
+n8n_data/

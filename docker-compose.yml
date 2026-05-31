@@ -1,0 +1,50 @@
+# =====================================================================
+# [CONCEPTO: Docker Compose — Orquestación multi-servicio]
+# docker-compose.yml define múltiples contenedores que trabajan juntos.
+# Con "docker compose up" arrancas toda la app con un comando.
+#
+# Servicios aquí:
+#   - bot: tu aplicación Python (LangGraph + Telegram + FastAPI)
+#   - n8n: plataforma de automatización visual para los recordatorios
+#
+# Aprende más: https://docs.docker.com/compose/
+# =====================================================================
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    env_file: .env
+    ports:
+      # Puerto local:puerto del contenedor
+      # El servidor FastAPI escucha aquí (para recibir webhooks de n8n)
+      - "8000:8000"
+    volumes:
+      # [CONCEPTO: Volumes — Persistencia de datos]
+      # Sin este volume, la base de datos SQLite se pierde al reiniciar.
+      # "./data" en tu máquina ↔ "/app/data" en el contenedor.
+      - ./data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - n8n
+
+  n8n:
+    # Imagen oficial de n8n — plataforma low-code de automatización
+    # Similar a Zapier/Make pero self-hosted y gratuito
+    image: docker.n8n.io/n8nio/n8n:latest
+    ports:
+      - "5678:5678"  # Interfaz web de n8n en http://localhost:5678
+    environment:
+      # Autenticación básica para proteger la interfaz web
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=changeme123  # Cámbialo en producción
+      # Timezone para los cron jobs de recordatorios
+      - GENERIC_TIMEZONE=America/Bogota
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: unless-stopped
+
+volumes:
+  # Volume nombrado para persistir los workflows de n8n
+  n8n_data:
