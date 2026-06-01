@@ -143,9 +143,11 @@ class UserStore:
             ("level_test_requested",  "INTEGER DEFAULT 0"),
             ("onboarding_done",       "INTEGER DEFAULT 0"),
             ("web_token",             "TEXT"),
-            # Días específicos de entrenamiento: "lunes,martes,jueves,viernes"
-            # Más preciso que days_per_week (número) para gestionar overrides de sesión.
             ("training_days",         "TEXT"),
+            # Control de acceso: 'active' | 'pending' | 'blocked'
+            # DEFAULT 'active' para que usuarios existentes no pierdan el acceso.
+            # Los usuarios nuevos se insertan explícitamente con 'pending'.
+            ("status",                "TEXT DEFAULT 'active'"),
         ]
         # Columnas para registro granular desde la app web (serie a serie)
         new_workout_columns = [
@@ -205,16 +207,57 @@ class UserStore:
                         (training_days_str, len(found), uid),
                     )
 
-    def upsert_user(self, telegram_id: str, name: str) -> None:
-        """Crea el usuario si no existe; no hace nada si ya existe."""
-        # [CONCEPTO: UPSERT con INSERT OR IGNORE]
-        # INSERT OR IGNORE intenta insertar; si hay conflicto en PRIMARY KEY,
-        # simplemente ignora sin error. Evita duplicados.
+    def upsert_user(self, telegram_id: str, name: str) -> bool:
+        """
+        Crea el usuario si no existe. Devuelve True si fue creado ahora.
+
+        [CONCEPTO: Detectar si un INSERT creó un registro nuevo]
+        INSERT OR IGNORE no nos dice si insertó o ignoró. Usamos SELECT previo
+        para detectar usuarios nuevos y asignarles status='pending'.
+        Los usuarios existentes conservan su status actual (no se sobreescribe).
+
+        Retorna True → usuario recién creado (pendiente de aprobación)
+        Retorna False → usuario ya existía
+        """
         with self._get_conn() as conn:
+            existing = conn.execute(
+                "SELECT telegram_id FROM users WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            if existing:
+                return False
+            # Nuevo usuario: status='pending' hasta que el admin lo apruebe
             conn.execute(
-                "INSERT OR IGNORE INTO users (telegram_id, name) VALUES (?, ?)",
+                "INSERT INTO users (telegram_id, name, status) VALUES (?, ?, 'pending')",
                 (telegram_id, name),
             )
+            return True
+
+    def get_user_status(self, telegram_id: str) -> str:
+        """Devuelve el status de acceso del usuario. 'unknown' si no existe."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT status FROM users WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            return row["status"] if row else "unknown"
+
+    def update_user_status(self, telegram_id: str, status: str) -> None:
+        """Actualiza el status de acceso: 'active', 'pending' o 'blocked'."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE users SET status = ? WHERE telegram_id = ?",
+                (status, telegram_id),
+            )
+
+    def get_all_users_with_status(self) -> list[dict]:
+        """Devuelve todos los usuarios con su estado, para el panel del admin."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT telegram_id, name, status, onboarding_done, created_at
+                   FROM users ORDER BY created_at DESC""",
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def get_user(self, telegram_id: str) -> Optional[dict]:
         with self._get_conn() as conn:

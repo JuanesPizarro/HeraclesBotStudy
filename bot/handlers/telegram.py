@@ -1,6 +1,7 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     ContextTypes,
@@ -87,6 +88,84 @@ def _extract_and_save_routine(user_id: str, response_text: str) -> str:
     except ValueError:
         # Si los marcadores están malformados, devolver el texto original sin romper
         return response_text.replace(ROUTINE_START, "").replace(ROUTINE_END, "")
+
+
+def _is_admin(user_id: str) -> bool:
+    return bool(settings.ADMIN_TELEGRAM_ID) and user_id == settings.ADMIN_TELEGRAM_ID
+
+
+async def handle_access_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Callback para los botones ✅ Aprobar / ❌ Bloquear que recibe el admin.
+
+    [CONCEPTO: CallbackQueryHandler a nivel de app]
+    Registrado ANTES del ConversationHandler para que el admin pueda
+    aprobar/bloquear en cualquier momento, aunque esté en otra conversación.
+    El patrón r'^access_(approve|block)_\\d+$' lo aísla de otros callbacks.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    if not _is_admin(str(query.from_user.id)):
+        return  # Solo el admin puede usar estos botones
+
+    # callback_data: "access_approve_123456" o "access_block_123456"
+    parts = query.data.split("_")   # ["access", "approve/block", "userid"]
+    action = parts[1]               # "approve" o "block"
+    target_id = parts[2]            # telegram_id del usuario
+
+    db_user = _store.get_user(target_id)
+    name = db_user["name"] if db_user else target_id
+
+    if action == "approve":
+        _store.update_user_status(target_id, "active")
+        await query.edit_message_text(
+            f"✅ *{name}* aprobado.", parse_mode="Markdown"
+        )
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=(
+                "✅ *¡Tu acceso fue aprobado!*\n\n"
+                "Escribe /start para configurar tu perfil y empezar. 💪"
+            ),
+            parse_mode="Markdown",
+        )
+    elif action == "block":
+        _store.update_user_status(target_id, "blocked")
+        await query.edit_message_text(
+            f"❌ *{name}* bloqueado.", parse_mode="Markdown"
+        )
+        await context.bot.send_message(
+            chat_id=target_id,
+            text="❌ Tu solicitud de acceso fue denegada.",
+        )
+
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /usuarios — muestra todos los usuarios y su estado (solo admin).
+
+    [CONCEPTO: Comandos de administración]
+    El bot actúa como su propio panel de control. No necesitamos una
+    interfaz web de admin separada para operaciones simples de gestión.
+    """
+    user_id = str(update.effective_user.id)
+    if not _is_admin(user_id):
+        return
+
+    all_users = _store.get_all_users_with_status()
+    if not all_users:
+        await update.message.reply_text("No hay usuarios registrados.")
+        return
+
+    STATUS_EMOJI = {"active": "✅", "pending": "⏳", "blocked": "❌"}
+    lines = ["*Usuarios registrados:*\n"]
+    for u in all_users:
+        emoji = STATUS_EMOJI.get(u["status"], "❓")
+        onboarding = "✓" if u["onboarding_done"] else "·"
+        lines.append(f"{emoji} {u['name']} `{u['telegram_id']}` {onboarding}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -200,6 +279,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     _store.upsert_user(user_id, user.first_name)
 
+    # Admin siempre activo
+    if _is_admin(user_id):
+        _store.update_user_status(user_id, "active")
+
+    status = _store.get_user_status(user_id)
+    if status == "pending":
+        await update.message.reply_text(
+            "⏳ Tu solicitud de acceso está en revisión.\n"
+            "Te notificaremos cuando sea aprobada."
+        )
+        return
+    if status == "blocked":
+        await update.message.reply_text("❌ Tu acceso está bloqueado.")
+        return
+
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action="typing",
@@ -247,13 +341,22 @@ def create_telegram_app() -> Application:
     """
     app = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
 
-    # Onboarding primero — intercepta /start y el flujo de preguntas
+    # [CONCEPTO: Orden de handlers en PTB]
+    # PTB evalúa handlers en orden de registro. Los callbacks de acceso
+    # van PRIMERO para que el admin pueda aprobar/bloquear en cualquier
+    # momento, sin que el ConversationHandler los intercepte.
+    app.add_handler(CallbackQueryHandler(
+        handle_access_decision, pattern=r"^access_(approve|block)_\d+$"
+    ))
+
+    # Onboarding — intercepta /start y el flujo de preguntas
     app.add_handler(build_onboarding_handler())
 
     # Comandos directos a DB (capa 0, sin LLM)
     app.add_handler(CommandHandler("rutina", rutina_command))
     app.add_handler(CommandHandler("historial", historial_command))
     app.add_handler(CommandHandler("webapp", webapp_command))
+    app.add_handler(CommandHandler("usuarios", users_command))
     app.add_handler(CommandHandler("ayuda", help_command))
 
     # [CONCEPTO: Filtros en handlers]

@@ -49,8 +49,40 @@ from telegram.ext import (
 )
 
 from bot.storage.user_store import UserStore
+from bot.config import settings
 
 _store = UserStore()
+
+
+async def _notify_admin_new_user(
+    context: ContextTypes.DEFAULT_TYPE, user_id: str, user_name: str
+) -> None:
+    """
+    Envía al admin una notificación con botones para aprobar o bloquear.
+
+    [CONCEPTO: Mensajes proactivos del bot]
+    El bot normalmente responde a mensajes entrantes. Pero también puede
+    enviar mensajes sin que nadie le hable, usando context.bot.send_message().
+    Esto es lo mismo que hace el webhook de n8n para recordatorios.
+    """
+    if not settings.ADMIN_TELEGRAM_ID:
+        return
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Aprobar", callback_data=f"access_approve_{user_id}"),
+            InlineKeyboardButton("❌ Bloquear", callback_data=f"access_block_{user_id}"),
+        ]
+    ])
+    await context.bot.send_message(
+        chat_id=settings.ADMIN_TELEGRAM_ID,
+        text=(
+            "⚠️ *Nueva solicitud de acceso*\n\n"
+            f"👤 {user_name}\n"
+            f"🆔 `{user_id}`"
+        ),
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
 
 # Estados — un entero por paso.
 # [CONCEPTO: range() para constantes secuenciales]
@@ -197,11 +229,41 @@ LEVEL_TEST_KEYBOARD = InlineKeyboardMarkup([
 # ─────────────────────────────────────────────────────────────────────
 
 async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entry point: lanza el onboarding o saluda si ya está configurado."""
-    user = update.effective_user
-    _store.upsert_user(str(user.id), user.first_name)
+    """
+    Entry point: valida acceso y lanza el onboarding o saluda.
 
-    if _store.is_onboarding_done(str(user.id)):
+    [CONCEPTO: Control de acceso en el entry point]
+    Verificamos el status ANTES de cualquier lógica de onboarding.
+    El admin siempre pasa — se auto-aprueba en el primer contacto.
+    Los usuarios nuevos quedan en 'pending' hasta que el admin los apruebe.
+    """
+    user = update.effective_user
+    user_id = str(user.id)
+    is_new = _store.upsert_user(user_id, user.first_name)
+
+    # El admin se auto-aprueba siempre
+    if settings.ADMIN_TELEGRAM_ID and user_id == settings.ADMIN_TELEGRAM_ID:
+        _store.update_user_status(user_id, "active")
+
+    status = _store.get_user_status(user_id)
+
+    if status == "pending":
+        await update.message.reply_text(
+            "⏳ *Tu solicitud de acceso está en revisión.*\n\n"
+            "El administrador te notificará cuando sea aprobada.",
+            parse_mode="Markdown",
+        )
+        if is_new:
+            await _notify_admin_new_user(context, user_id, user.first_name)
+        return ConversationHandler.END
+
+    if status == "blocked":
+        await update.message.reply_text(
+            "❌ Tu acceso está bloqueado. Contacta al administrador."
+        )
+        return ConversationHandler.END
+
+    if _store.is_onboarding_done(user_id):
         await update.message.reply_text(
             f"¡Hola de nuevo, {user.first_name}! 💪\n\n"
             "Tu perfil ya está listo. Pídeme que te genere una rutina "

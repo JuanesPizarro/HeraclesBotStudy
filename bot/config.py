@@ -27,6 +27,8 @@ class Settings:
     # Con Cloudflare Tunnel: https://tu-dominio.com
     # Sin dominio (solo local): http://localhost:8000
     WEB_URL: str = os.getenv("WEB_URL", f"http://localhost:{os.getenv('PORT', '8000')}")
+    # ID de Telegram del administrador — recibe notificaciones y puede aprobar/bloquear usuarios
+    ADMIN_TELEGRAM_ID: str = os.getenv("ADMIN_TELEGRAM_ID", "")
 
     def validate(self) -> None:
         """Valida que las variables críticas estén presentes antes de arrancar."""
