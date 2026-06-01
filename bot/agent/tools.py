@@ -76,6 +76,25 @@ def update_goal(user_id: str, new_goal: str) -> str:
 
 
 @tool
+def update_equipment(user_id: str, equipment_detail: str) -> str:
+    """
+    Actualiza la lista de implementos disponibles del usuario.
+    Úsala cuando el usuario mencione que consiguió equipamiento nuevo
+    o que ya no tiene algún implemento.
+
+    IMPORTANTE: el argumento debe ser la lista COMPLETA actualizada,
+    no solo los cambios. Combina lo actual con las modificaciones antes de llamar.
+
+    Args:
+        user_id: ID de Telegram del usuario
+        equipment_detail: Lista completa de implementos separados por coma
+                          (ej: "barra olímpica, mancuernas 2-20 kg, banco ajustable, paralelas")
+    """
+    _store.update_equipment(user_id, equipment_detail)
+    return f"Equipamiento actualizado correctamente: {equipment_detail}"
+
+
+@tool
 def log_session_override(
     user_id: str,
     target_date: str,
@@ -120,4 +139,4 @@ def log_session_override(
 # [CONCEPTO: Lista de tools mínima]
 # 3 tools — todos de escritura. Las lecturas (perfil, rutina, historial,
 # overrides activos) se inyectan en el system prompt sin costo extra.
-TOOLS = [save_workout, update_goal, log_session_override]
+TOOLS = [save_workout, update_goal, update_equipment, log_session_override]

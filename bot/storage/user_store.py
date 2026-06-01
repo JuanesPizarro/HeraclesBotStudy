@@ -390,6 +390,14 @@ class UserStore:
             ).fetchone()
             return bool(row and row["onboarding_done"])
 
+    def update_equipment(self, telegram_id: str, home_equipment_detail: str) -> None:
+        """Actualiza la lista de implementos del usuario."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE users SET home_equipment_detail = ? WHERE telegram_id = ?",
+                (home_equipment_detail, telegram_id),
+            )
+
     def update_training_days(self, telegram_id: str, training_days: str) -> None:
         """Actualiza los días de entrenamiento del usuario."""
         days_count = len([d for d in training_days.split(",") if d.strip()])

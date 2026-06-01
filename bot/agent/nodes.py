@@ -10,6 +10,9 @@ from bot.agent.state import AgentState
 from bot.agent.tools import TOOLS
 from bot.storage.user_store import UserStore
 
+# URL base para el enlace personal de la app web
+_WEB_URL = settings.WEB_URL.rstrip("/")
+
 # =====================================================================
 # [CONCEPTO: Compatibilidad OpenAI → DeepSeek]
 # DeepSeek expone la misma API REST que OpenAI (chat completions).
@@ -113,11 +116,27 @@ MODIFICACIONES ACTIVAS (temporales)
 {recent_workouts}
 
 ════════════════════════════════════
+REGISTRO DE SESIÓN — APP WEB
+════════════════════════════════════
+Cuando el usuario quiera registrar, anotar o iniciar una sesión de entrenamiento,
+responde SIEMPRE enviando su enlace personal. NO recolectes datos por chat.
+
+Enlace personal: {webapp_url}
+
+La app web tiene:
+• Plan del día precargado con sus ejercicios en orden
+• Peso sugerido desde su historial
+• Cronómetro de descanso automático según rango de reps
+• RIR y notas por serie
+
+════════════════════════════════════
 HERRAMIENTAS DISPONIBLES
 ════════════════════════════════════
-• save_workout         → cuando el usuario reporte haber completado un ejercicio.
+• save_workout         → cuando el usuario reporte haber completado un ejercicio por chat.
                          PRIMERO guárdalo, LUEGO responde con feedback.
 • update_goal          → cuando el usuario mencione explícitamente un nuevo objetivo.
+• update_equipment     → cuando el usuario diga que consiguió o perdió equipamiento.
+                         Pasa la lista COMPLETA actualizada (no solo el cambio).
 • log_session_override → cuando el usuario mencione un cambio TEMPORAL a su entrenamiento.
                          NO toques la rutina general. Solo crea el override.
 
@@ -346,6 +365,13 @@ def _build_context(user_id: str) -> dict:
     else:
         routine_text = "Sin rutina guardada. Cuando el usuario lo pida, genera una."
 
+    # ── Enlace personal a la app web ────────────────────────────────────
+    web_token = user.get("web_token") if user else None
+    if web_token:
+        webapp_url = f"{_WEB_URL}/app?token={web_token}"
+    else:
+        webapp_url = "(el usuario aún no tiene enlace — usa /webapp para generarlo)"
+
     # ── Lo que hizo hoy (sesión registrada) ─────────────────────────────
     today_workouts = _store.get_today_workouts(user_id)
     if today_workouts:
@@ -384,6 +410,7 @@ def _build_context(user_id: str) -> dict:
         "today_date": today_date_str,
         "session_today": session_today_text,
         "today_done": today_done_text,
+        "webapp_url": webapp_url,
         "profile": profile_text,
         "routine": routine_text,
         "overrides": overrides_text,
@@ -415,6 +442,7 @@ def agent_node(state: AgentState) -> dict:
         today_date=context["today_date"],
         session_today=context["session_today"],
         today_done=context["today_done"],
+        webapp_url=context["webapp_url"],
         profile=context["profile"],
         routine=context["routine"],
         overrides=context["overrides"],
