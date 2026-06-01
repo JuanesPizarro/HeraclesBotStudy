@@ -29,6 +29,8 @@ class Settings:
     WEB_URL: str = os.getenv("WEB_URL", f"http://localhost:{os.getenv('PORT', '8000')}")
     # ID de Telegram del administrador — recibe notificaciones y puede aprobar/bloquear usuarios
     ADMIN_TELEGRAM_ID: str = os.getenv("ADMIN_TELEGRAM_ID", "")
+    # Zona horaria del servidor — afecta qué día es "hoy" para el plan y el historial
+    TIMEZONE: str = os.getenv("TIMEZONE", "America/Santiago")
 
     def validate(self) -> None:
         """Valida que las variables críticas estén presentes antes de arrancar."""

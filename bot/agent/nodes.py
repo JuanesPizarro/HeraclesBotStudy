@@ -1,5 +1,6 @@
 import datetime
 import re
+import zoneinfo
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode
@@ -87,9 +88,14 @@ PERFIL DEL USUARIO
 {profile}
 
 ════════════════════════════════════
-SESIÓN DE HOY
+SESIÓN DE HOY — PLAN
 ════════════════════════════════════
 {session_today}
+
+════════════════════════════════════
+SESIÓN DE HOY — LO QUE HICISTE
+════════════════════════════════════
+{today_done}
 
 ════════════════════════════════════
 RUTINA GENERAL (base inmutable)
@@ -264,7 +270,12 @@ def _build_context(user_id: str) -> dict:
     overrides = _store.get_active_overrides(user_id)
 
     # ── Contexto temporal ────────────────────────────────────────────────
-    today = datetime.date.today()
+    # [CONCEPTO: zoneinfo — zona horaria correcta en Python 3.9+]
+    # datetime.date.today() usa la zona del sistema operativo.
+    # En un servidor en UTC, "hoy" cambia a las 9pm hora de Santiago.
+    # zoneinfo.ZoneInfo() aplica el offset correcto (incluye DST automático).
+    tz = zoneinfo.ZoneInfo(settings.TIMEZONE)
+    today = datetime.datetime.now(tz).date()
     today_date_str = today.strftime("%Y-%m-%d")
     today_display = today.strftime("%d/%m/%Y")
     today_day = _DAYS_ES[today.weekday()]
@@ -335,7 +346,27 @@ def _build_context(user_id: str) -> dict:
     else:
         routine_text = "Sin rutina guardada. Cuando el usuario lo pida, genera una."
 
-    # ── Historial reciente ───────────────────────────────────────────────
+    # ── Lo que hizo hoy (sesión registrada) ─────────────────────────────
+    today_workouts = _store.get_today_workouts(user_id)
+    if today_workouts:
+        # Agrupar por ejercicio para una lectura compacta
+        groups: dict[str, list] = {}
+        for w in today_workouts:
+            groups.setdefault(w["exercise"], []).append(w)
+        tw_lines = []
+        for ex, sets in groups.items():
+            series_str = "  ".join(
+                f"S{i+1}: {s['reps']}r @{s['weight_kg']}kg"
+                + (f" RIR{s['rir']}" if s.get("rir") is not None else "")
+                + (f" ({s['notes']})" if s.get("notes") else "")
+                for i, s in enumerate(sets)
+            )
+            tw_lines.append(f"• {ex}: {series_str}")
+        today_done_text = "\n".join(tw_lines)
+    else:
+        today_done_text = "No hay series registradas hoy todavía."
+
+    # ── Historial reciente (sesiones anteriores) ─────────────────────────
     if workouts:
         lines = []
         for w in workouts:
@@ -352,6 +383,7 @@ def _build_context(user_id: str) -> dict:
         "today": f"{today_display} ({today_day.capitalize()})",
         "today_date": today_date_str,
         "session_today": session_today_text,
+        "today_done": today_done_text,
         "profile": profile_text,
         "routine": routine_text,
         "overrides": overrides_text,
@@ -382,6 +414,7 @@ def agent_node(state: AgentState) -> dict:
         today=context["today"],
         today_date=context["today_date"],
         session_today=context["session_today"],
+        today_done=context["today_done"],
         profile=context["profile"],
         routine=context["routine"],
         overrides=context["overrides"],

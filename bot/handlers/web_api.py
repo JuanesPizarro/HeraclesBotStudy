@@ -13,6 +13,7 @@ un único source of truth para todos los canales de entrada.
 import datetime
 import os
 import re
+import zoneinfo
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -275,7 +276,8 @@ async def get_session_plan(user: dict = Depends(get_current_user)) -> dict:
     Para un proyecto personal es el enfoque correcto.
     """
     uid = user["telegram_id"]
-    today = datetime.date.today()
+    tz = zoneinfo.ZoneInfo(settings.TIMEZONE)
+    today = datetime.datetime.now(tz).date()
     today_day = _DAYS_ES[today.weekday()]
 
     training_days = [

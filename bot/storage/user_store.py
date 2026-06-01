@@ -362,7 +362,7 @@ class UserStore:
             rows = conn.execute(
                 """SELECT id, exercise, sets, reps, weight_kg, rir, notes, logged_at
                    FROM workouts
-                   WHERE user_id = ? AND DATE(logged_at) = DATE('now')
+                   WHERE user_id = ? AND DATE(logged_at, 'localtime') = DATE('now', 'localtime')
                    ORDER BY logged_at ASC""",
                 (user_id,),
             ).fetchall()

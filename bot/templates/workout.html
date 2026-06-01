@@ -67,9 +67,10 @@
 
     <!-- ── SESIÓN COMPLETADA ────────────────────────────── -->
     <div x-show="!loading && sessionComplete" class="flex-1 flex flex-col items-center justify-center px-4 space-y-5">
-      <div class="text-5xl">🏆</div>
+      <div class="text-5xl" x-text="sessionWasAlreadyDone ? '✅' : '🏆'"></div>
       <div class="text-center">
-        <p class="text-xl font-bold text-emerald-400">¡Sesión completada!</p>
+        <p class="text-xl font-bold text-emerald-400"
+           x-text="sessionWasAlreadyDone ? 'Ya completaste tu sesión de hoy' : '¡Sesión completada!'"></p>
         <p class="text-zinc-500 text-sm mt-1" x-text="plan?.day_name"></p>
       </div>
       <!-- Resumen por ejercicio -->
@@ -143,8 +144,9 @@
             <span class="text-xs text-indigo-400 font-semibold"
                   x-text="currentExercise?.target_sets + ' series × ' + currentExercise?.target_reps + ' reps'"></span>
             <div class="flex-1"></div>
-            <span class="px-2 py-0.5 bg-indigo-950 text-indigo-400 text-xs font-bold rounded-lg border border-indigo-900"
-                  x-text="'Serie ' + (setsCompleted+1) + ' de ' + currentExercise?.target_sets"></span>
+            <span class="px-2 py-0.5 text-xs font-bold rounded-lg border transition-colors duration-300"
+                  :class="targetMet ? 'bg-emerald-950 text-emerald-400 border-emerald-900' : 'bg-indigo-950 text-indigo-400 border-indigo-900'"
+                  x-text="targetMet ? '✅ ' + currentExercise?.target_sets + '/' + currentExercise?.target_sets : 'Serie ' + (setsCompleted + 1) + ' de ' + currentExercise?.target_sets"></span>
           </div>
         </div>
 
@@ -204,10 +206,10 @@
         <p x-show="error" x-text="error" class="text-rose-400 text-xs" x-cloak></p>
 
         <!-- Guardar -->
-        <button @click="saveSet()" :disabled="loading"
+        <button @click="saveSet()" :disabled="loading || advancing"
                 class="w-full py-3.5 rounded-xl font-bold text-sm transition-all active:scale-[0.98] disabled:opacity-50"
-                :class="saveSuccess ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'"
-                x-text="saveSuccess ? '✅ Serie guardada' : loading ? 'Guardando...' : '💾 Guardar Serie'">
+                :class="advancing ? 'bg-emerald-700 text-white' : saveSuccess ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'"
+                x-text="advancing ? '⏭ Siguiente ejercicio...' : saveSuccess ? '✅ Serie guardada' : loading ? 'Guardando...' : '💾 Guardar Serie'">
         </button>
       </div>
 
@@ -267,23 +269,10 @@
         </div>
       </div>
 
-      <!-- Siguiente / Terminar -->
-      <template x-if="targetMet">
-        <div class="space-y-2">
-          <button @click="nextExercise()"
-                  class="w-full py-3.5 rounded-xl font-bold text-sm bg-emerald-700 hover:bg-emerald-600 text-white transition-all active:scale-[0.98]"
-                  x-text="isLastExercise ? '✓ Terminar sesión' : 'Siguiente ejercicio →'">
-          </button>
-          <p class="text-center text-[11px] text-zinc-600">
-            Puedes seguir añadiendo series antes de avanzar
-          </p>
-        </div>
-      </template>
-
-      <!-- Saltar ejercicio (siempre disponible, menos prominente) -->
-      <template x-if="!isLastExercise && !targetMet">
+      <!-- Saltar ejercicio (siempre disponible para emergencias) -->
+      <template x-if="!isLastExercise">
         <button @click="skipExercise()"
-                class="w-full py-2.5 rounded-xl text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
+                class="w-full py-2 rounded-xl text-xs text-zinc-700 hover:text-zinc-500 transition-colors">
           Saltar este ejercicio →
         </button>
       </template>
@@ -309,6 +298,7 @@
         currentExIdx: 0,
         session: [],
         sessionComplete: false,
+        sessionWasAlreadyDone: false,  // true si estaba completa al abrir (no en esta visita)
 
         // ── Formulario de serie ─────────────────────
         weight: '',
@@ -319,6 +309,7 @@
         // ── UI ─────────────────────────────────────
         loading: true,
         saveSuccess: false,
+        advancing: false,   // true durante el delay de auto-avance
         error: '',
 
         // ── Cronómetro ──────────────────────────────
@@ -380,7 +371,7 @@
           await Promise.all([this.fetchProfile(), this.fetchPlan(), this.fetchSession()]);
           this.loading = false;
           if (this.plan && !this.plan.is_rest_day) {
-            this._loadExercise(0);
+            this._resumeSession();
           }
         },
 
@@ -407,6 +398,26 @@
             const res = await fetch(`/api/session/today?token=${this.token}`);
             this.session = res.ok ? await res.json() : [];
           } catch (_) { this.session = []; }
+        },
+
+        // ── Reanudar sesión al recargar ──────────────
+
+        _resumeSession() {
+          const exercises = this.plan?.exercises;
+          if (!exercises?.length) return;
+
+          // Buscar el primer ejercicio que aún no tiene todas las series completadas
+          for (let i = 0; i < exercises.length; i++) {
+            const logged = this.session.filter(s => s.exercise === exercises[i].name).length;
+            if (logged < exercises[i].target_sets) {
+              this._loadExercise(i);
+              return;
+            }
+          }
+
+          // Todos los ejercicios ya estaban completos al cargar la página
+          this.sessionComplete = true;
+          this.sessionWasAlreadyDone = true;
         },
 
         // ── Cargar ejercicio ─────────────────────────
@@ -467,8 +478,23 @@
             this.notes = '';
             this.rir   = 2;
             this.saveSuccess = true;
-            setTimeout(() => this.saveSuccess = false, 2000);
             this.startTimer();
+
+            // Verificar si se cumplió el objetivo de series
+            const newCount = this.session.filter(s => s.exercise === exercise).length;
+            const target   = this.currentExercise?.target_sets ?? 99;
+            if (newCount >= target) {
+              // Auto-avanzar tras 1.5s — el timer sigue corriendo para el descanso
+              this.saveSuccess = false;
+              this.advancing   = true;
+              setTimeout(() => {
+                this.advancing = false;
+                if (this.isLastExercise) this.finishSession();
+                else this.nextExercise();
+              }, 1500);
+            } else {
+              setTimeout(() => { this.saveSuccess = false; }, 2000);
+            }
 
           } catch (e) {
             this.error = e.message || '❌ Error al guardar. Intenta de nuevo.';
