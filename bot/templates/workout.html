@@ -490,11 +490,19 @@
             this.notes = '';
             this.rir   = 2;
             this.saveSuccess = true;
-            setTimeout(() => { this.saveSuccess = false; }, 1800);
 
-            // Siempre arranca el timer. Si es la última serie del ejercicio,
-            // el timer al llegar a 0 avanza al siguiente ejercicio automáticamente.
-            this.startTimer();
+            const newCount = this.session.filter(s => s.exercise === exercise).length;
+            const target   = this.currentExercise?.target_sets ?? 99;
+
+            if (newCount >= target && this.isLastExercise) {
+              // Último ejercicio completado — no hay siguiente, cerrar sesión directo
+              setTimeout(() => this.finishSession(), 1500);
+            } else {
+              setTimeout(() => { this.saveSuccess = false; }, 1800);
+              // Para series intermedias o ejercicios intermedios, arrancar el timer.
+              // Cuando el timer expire y targetMet → nextExercise() automático.
+              this.startTimer();
+            }
 
           } catch (e) {
             this.error = e.message || '❌ Error al guardar. Intenta de nuevo.';
