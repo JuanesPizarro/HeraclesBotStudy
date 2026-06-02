@@ -70,21 +70,96 @@ def _parse_session_exercises(section_text: str) -> list[dict]:
     """
     Parsea las líneas de una sección de rutina en objetos estructurados.
 
-    [CONCEPTO: Regex con grupos nombrados para parsing robusto]
-    El formato de la rutina es: '• Nombre: SxR[unidad] — nota'
-    Ejemplos:
-      • Sentadilla goblet: 3x10-12 — Sujeta una mancuerna
-      • Plancha antebrazos: 3x30-45 seg — Cero presión en muñeca
-      • Dominadas: 3x5-8 — Asistidas con banda
+    [CONCEPTO: Parsing de formatos mixtos con estado]
+    La rutina puede mezclar dos formatos en el mismo día:
 
-    Circuitos y encabezados (líneas con ─ o 📋) se saltan automáticamente.
+    Formato normal:
+      • Sentadilla goblet: 3x10-12 — Sujeta una mancuerna
+      → target_sets=3, is_circuit=False
+
+    Formato circuito:
+      • Circuito (3 rondas, descanso 60s entre rondas):
+        • Zancadas: 10 por pierna
+        • Plancha: 30 segundos
+      → target_sets=3 (rondas), is_circuit=True, circuit_position=0/1
+
+    El parser usa una máquina de estados: normal vs. dentro_de_circuito.
+    Los sub-ítems del circuito tienen 2 espacios de sangría.
     """
-    exercises = []
+    exercises: list[dict] = []
+    in_circuit = False
+    circuit_rounds = 0
+    circuit_rest = 0
+    circuit_items: list[dict] = []
+
+    def _flush_circuit() -> None:
+        nonlocal in_circuit, circuit_items
+        if not circuit_items:
+            return
+        size = len(circuit_items)
+        for pos, item in enumerate(circuit_items):
+            item.update({
+                "is_circuit": True,
+                "circuit_rounds": circuit_rounds,
+                "circuit_rest": circuit_rest,
+                "circuit_position": pos,
+                "circuit_size": size,
+                "target_sets": circuit_rounds,
+                # Descanso solo después del último ejercicio de cada ronda
+                "suggested_rest": circuit_rest if pos == size - 1 else 0,
+            })
+            exercises.append(item)
+        circuit_items.clear()
+        in_circuit = False
+
     for line in section_text.split("\n"):
         stripped = line.strip()
-        # Solo líneas que empiezan con bullet de primer nivel (no sub-items de circuito)
-        if not stripped.startswith("•") or line.startswith("  "):
+        if not stripped:
             continue
+
+        is_indented = line.startswith("  ")
+
+        # ── Sub-ítem de circuito (sangría + bullet) ────────────────────────
+        if in_circuit and is_indented and stripped.startswith("•"):
+            sub = re.match(r"^[•]\s+(.+?):\s+([\d]+(?:-[\d]+)?)\s*(.*)", stripped)
+            if sub:
+                name = sub.group(1).strip()
+                reps_raw = sub.group(2).strip()
+                unit_note = sub.group(3).strip()
+                # "reps" y "repeticiones" son unidades, no notas
+                note = "" if unit_note.lower() in ("reps", "rep", "repeticiones") else unit_note
+                nums = re.findall(r"\d+", reps_raw)
+                reps_min = reps_max = int(nums[0]) if nums else 8
+                if len(nums) >= 2:
+                    reps_min, reps_max = int(nums[0]), int(nums[1])
+                circuit_items.append({
+                    "name": name,
+                    "target_reps": reps_raw + (" " + note if note else ""),
+                    "reps_min": reps_min,
+                    "reps_max": reps_max,
+                    "note": note,
+                    "suggested_weight": 0.0,
+                })
+            continue
+
+        # ── Solo bullets de primer nivel (sin sangría) ─────────────────────
+        if not stripped.startswith("•") or is_indented:
+            continue
+
+        _flush_circuit()  # cerrar circuito anterior si lo hay
+
+        # ── Encabezado de circuito ─────────────────────────────────────────
+        c_match = re.match(
+            r"^[•]\s+[Cc]ircuito[^(]*\((\d+)\s+rondas[^)]*descanso\s+(\d+)s",
+            stripped,
+        )
+        if c_match:
+            in_circuit = True
+            circuit_rounds = int(c_match.group(1))
+            circuit_rest = int(c_match.group(2))
+            continue
+
+        # ── Ejercicio normal: '• Nombre: SxR — nota' ──────────────────────
         match = re.match(
             r"^[•]\s+(.+?):\s+(\d+)\s*[xX×]\s*([\d]+(?:-[\d]+)?(?:\s+(?:seg|segundos|min))?)(.*)",
             stripped,
@@ -96,7 +171,6 @@ def _parse_session_exercises(section_text: str) -> list[dict]:
         reps_raw = match.group(3).strip()
         note = match.group(4).strip().lstrip("—").strip()
 
-        # Extraer valores numéricos de "10-12", "30-45 seg", "30"
         nums = re.findall(r"\d+", reps_raw)
         if len(nums) >= 2:
             reps_min, reps_max = int(nums[0]), int(nums[1])
@@ -113,8 +187,15 @@ def _parse_session_exercises(section_text: str) -> list[dict]:
             "reps_max": reps_max,
             "note": note,
             "suggested_rest": _suggest_rest(reps_min, reps_max),
-            "suggested_weight": 0.0,  # se rellena desde el historial después
+            "suggested_weight": 0.0,
+            "is_circuit": False,
+            "circuit_rounds": 0,
+            "circuit_rest": 0,
+            "circuit_position": 0,
+            "circuit_size": 0,
         })
+
+    _flush_circuit()  # flush si la sección termina dentro de un circuito
     return exercises
 
 

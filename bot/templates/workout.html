@@ -116,11 +116,13 @@
       <div>
         <p class="text-[10px] font-bold text-zinc-600 uppercase tracking-widest" x-text="plan?.day_name"></p>
         <div class="mt-2 flex items-center gap-3">
-          <!-- Barra de progreso -->
+          <!-- Barra de progreso (circuito en ámbar, normal en índigo/esmeralda) -->
           <div class="flex-1 flex gap-1">
             <template x-for="(ex, i) in (plan?.exercises || [])" :key="i">
               <div class="flex-1 h-1.5 rounded-full transition-all duration-300"
-                   :class="i < currentExIdx ? 'bg-emerald-600' : i === currentExIdx ? 'bg-indigo-500' : 'bg-zinc-800'">
+                   :class="ex.is_circuit
+                     ? (i < currentExIdx ? 'bg-amber-700' : i === currentExIdx ? 'bg-amber-400' : 'bg-zinc-800')
+                     : (i < currentExIdx ? 'bg-emerald-600' : i === currentExIdx ? 'bg-indigo-500' : 'bg-zinc-800')">
               </div>
             </template>
           </div>
@@ -132,21 +134,63 @@
       <!-- Card ejercicio actual -->
       <div class="bg-zinc-900 rounded-2xl p-4 border border-zinc-800 space-y-4">
 
+        <!-- Badge circuito -->
+        <template x-if="isCircuitExercise">
+          <div class="flex items-center gap-2 -mb-1">
+            <span class="text-[10px] font-bold text-amber-500 uppercase tracking-widest">
+              🔄 Circuito —
+              <span x-text="'Ronda ' + circuitRound + ' / ' + currentExercise?.circuit_rounds"></span>
+            </span>
+          </div>
+        </template>
+
         <!-- Nombre y nota -->
         <div>
           <p class="text-base font-bold text-zinc-100 leading-snug" x-text="currentExercise?.name"></p>
           <template x-if="currentExercise?.note">
             <p class="text-[11px] text-zinc-500 italic mt-1 leading-snug" x-text="currentExercise.note"></p>
           </template>
-          <!-- Objetivo + serie actual -->
+          <!-- Mini-mapa de ejercicios del circuito -->
+          <template x-if="isCircuitExercise">
+            <div class="flex gap-1 mt-2">
+              <template x-for="(cex, ci) in circuitExercisesFromPlan" :key="ci">
+                <div class="flex-1">
+                  <div class="h-1 rounded-full mb-0.5 transition-all duration-300"
+                       :class="ci < currentExercise.circuit_position ? 'bg-amber-700'
+                             : ci === currentExercise.circuit_position ? 'bg-amber-400'
+                             : 'bg-zinc-700'"></div>
+                  <p class="text-[9px] text-zinc-600 truncate text-center leading-tight"
+                     x-text="cex.name.split(' ')[0]"></p>
+                </div>
+              </template>
+            </div>
+          </template>
+          <!-- Objetivo + estado -->
           <div class="flex items-center gap-2 mt-2">
             <span class="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">Objetivo</span>
-            <span class="text-xs text-indigo-400 font-semibold"
-                  x-text="currentExercise?.target_sets + ' series × ' + currentExercise?.target_reps + ' reps'"></span>
+            <!-- Objetivo normal -->
+            <template x-if="!isCircuitExercise">
+              <span class="text-xs text-indigo-400 font-semibold"
+                    x-text="currentExercise?.target_sets + ' series × ' + currentExercise?.target_reps + ' reps'"></span>
+            </template>
+            <!-- Objetivo circuito -->
+            <template x-if="isCircuitExercise">
+              <span class="text-xs text-amber-400 font-semibold"
+                    x-text="currentExercise?.circuit_rounds + ' rondas × ' + currentExercise?.target_reps + ' reps'"></span>
+            </template>
             <div class="flex-1"></div>
-            <span class="px-2 py-0.5 text-xs font-bold rounded-lg border transition-colors duration-300"
-                  :class="targetMet ? 'bg-emerald-950 text-emerald-400 border-emerald-900' : 'bg-indigo-950 text-indigo-400 border-indigo-900'"
-                  x-text="targetMet ? '✅ ' + currentExercise?.target_sets + '/' + currentExercise?.target_sets : 'Serie ' + (setsCompleted + 1) + ' de ' + currentExercise?.target_sets"></span>
+            <!-- Badge estado normal -->
+            <template x-if="!isCircuitExercise">
+              <span class="px-2 py-0.5 text-xs font-bold rounded-lg border transition-colors duration-300"
+                    :class="targetMet ? 'bg-emerald-950 text-emerald-400 border-emerald-900' : 'bg-indigo-950 text-indigo-400 border-indigo-900'"
+                    x-text="targetMet ? '✅ ' + currentExercise?.target_sets + '/' + currentExercise?.target_sets : 'Serie ' + (setsCompleted + 1) + ' de ' + currentExercise?.target_sets"></span>
+            </template>
+            <!-- Badge estado circuito -->
+            <template x-if="isCircuitExercise">
+              <span class="px-2 py-0.5 text-xs font-bold rounded-lg border transition-colors duration-300"
+                    :class="targetMet ? 'bg-emerald-950 text-emerald-400 border-emerald-900' : 'bg-amber-950 text-amber-400 border-amber-900'"
+                    x-text="targetMet ? '✅ Ronda ' + circuitRound + ' lista' : 'Ronda ' + circuitRound + ' / ' + currentExercise?.circuit_rounds"></span>
+            </template>
           </div>
         </div>
 
@@ -208,24 +252,32 @@
         <!-- Guardar -->
         <button @click="saveSet()" :disabled="loading || advancing"
                 class="w-full py-3.5 rounded-xl font-bold text-sm transition-all active:scale-[0.98] disabled:opacity-50"
-                :class="advancing ? 'bg-emerald-700 text-white' : saveSuccess ? 'bg-emerald-600 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'"
-                x-text="advancing ? '⏭ Siguiente ejercicio...' : saveSuccess ? '✅ Serie guardada' : loading ? 'Guardando...' : '💾 Guardar Serie'">
+                :class="advancing ? 'bg-emerald-700 text-white' : saveSuccess ? 'bg-emerald-600 text-white' : isCircuitExercise ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'"
+                x-text="saveButtonLabel">
         </button>
       </div>
 
-      <!-- Timer -->
-      <div class="bg-zinc-900 rounded-2xl p-4 border border-zinc-800"
+      <!-- Timer (oculto en ejercicios intermedios del circuito) -->
+      <div x-show="showTimer" class="bg-zinc-900 rounded-2xl p-4 border border-zinc-800"
            :class="targetMet ? 'border-emerald-900/50' : 'border-zinc-800'">
         <div class="flex items-center justify-between mb-3">
           <div>
             <span class="text-[10px] font-bold uppercase tracking-widest"
                   :class="targetMet ? 'text-emerald-500' : 'text-zinc-500'"
-                  x-text="targetMet ? '⏭ SIGUIENTE EN...' : 'DESCANSO'"></span>
-            <template x-if="targetMet && !isLastExercise">
+                  x-text="isLastInCircuit && targetMet && !_pendingCircuitLoop
+                          ? '🔄 SIGUIENTE RONDA EN...'
+                          : targetMet ? '⏭ SIGUIENTE EN...' : 'DESCANSO'"></span>
+            <!-- Normal: mostrar nombre del siguiente ejercicio -->
+            <template x-if="targetMet && !isLastExercise && !isLastInCircuit">
               <p class="text-[11px] text-zinc-400 mt-0.5"
                  x-text="plan?.exercises?.[currentExIdx + 1]?.name"></p>
             </template>
-            <template x-if="targetMet && isLastExercise">
+            <!-- Circuito: mostrar primer ejercicio de la siguiente ronda -->
+            <template x-if="targetMet && isLastInCircuit && circuitRound < currentExercise?.circuit_rounds">
+              <p class="text-[11px] text-amber-400 mt-0.5"
+                 x-text="'→ ' + circuitExercisesFromPlan[0]?.name"></p>
+            </template>
+            <template x-if="targetMet && isLastExercise && !isLastInCircuit">
               <p class="text-[11px] text-emerald-500 mt-0.5">Último ejercicio completado</p>
             </template>
           </div>
@@ -257,15 +309,17 @@
         </div>
       </div>
 
-      <!-- Sets del ejercicio actual -->
+      <!-- Sets del ejercicio actual (en circuito muestra todas las rondas) -->
       <div x-show="setsForCurrentEx.length > 0" class="bg-zinc-900 rounded-2xl p-3 border border-zinc-800">
         <p class="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">
-          Series de <span x-text="currentExercise?.name"></span>
+          <span x-text="isCircuitExercise ? 'Historial · ' : 'Series de '"></span>
+          <span x-text="currentExercise?.name"></span>
         </p>
         <div class="space-y-1.5">
           <template x-for="(set, i) in setsForCurrentEx" :key="set.id">
             <div class="flex items-center gap-3 text-sm">
-              <span class="text-[11px] text-zinc-700 font-mono w-5" x-text="'S'+(i+1)"></span>
+              <span class="text-[11px] text-zinc-700 font-mono w-5"
+                    x-text="isCircuitExercise ? 'R'+(i+1) : 'S'+(i+1)"></span>
               <span class="flex-1 text-zinc-300">
                 <span class="font-semibold" x-text="set.weight_kg === 0 ? 'PC' : set.weight_kg+'kg'"></span>
                 <span class="text-zinc-600"> × </span>
@@ -310,7 +364,7 @@
         currentExIdx: 0,
         session: [],
         sessionComplete: false,
-        sessionWasAlreadyDone: false,  // true si estaba completa al abrir (no en esta visita)
+        sessionWasAlreadyDone: false,
 
         // ── Formulario de serie ─────────────────────
         weight: '',
@@ -321,7 +375,7 @@
         // ── UI ─────────────────────────────────────
         loading: true,
         saveSuccess: false,
-        advancing: false,   // true durante el delay de auto-avance
+        advancing: false,
         error: '',
 
         // ── Cronómetro ──────────────────────────────
@@ -332,6 +386,17 @@
         timerDone: false,
         _timerInterval: null,
 
+        // ── Circuito ────────────────────────────────
+        // [CONCEPTO: máquina de estados para circuitos]
+        // circuitRound: ronda actual (1-based). Se calcula desde los datos de sesión
+        // al entrar al primer ejercicio del circuito, lo que hace el resume automático.
+        // circuitCompletedSets: baseline de sets por ejercicio antes de esta ronda.
+        // _pendingCircuitLoop: flag que le dice al callback del timer que, al expirar,
+        // debe volver al primer ejercicio del circuito (no avanzar al siguiente).
+        circuitRound: 1,
+        circuitCompletedSets: {},
+        _pendingCircuitLoop: false,
+
         // ── Computed ────────────────────────────────
 
         get currentExercise() {
@@ -340,6 +405,34 @@
 
         get isLastExercise() {
           return this.currentExIdx >= (this.plan?.exercises?.length ?? 0) - 1;
+        },
+
+        get isCircuitExercise() {
+          return !!this.currentExercise?.is_circuit;
+        },
+
+        get isLastInCircuit() {
+          const ex = this.currentExercise;
+          return !!ex?.is_circuit && ex.circuit_position === ex.circuit_size - 1;
+        },
+
+        // Índice del primer ejercicio del bloque circuito actual
+        get circuitFirstIdx() {
+          const ex = this.currentExercise;
+          if (!ex?.is_circuit) return this.currentExIdx;
+          return this.currentExIdx - ex.circuit_position;
+        },
+
+        get circuitExercisesFromPlan() {
+          return (this.plan?.exercises || []).filter(e => e.is_circuit);
+        },
+
+        // El timer solo se muestra en ejercicios normales y en el último del circuito
+        get showTimer() {
+          const ex = this.currentExercise;
+          if (!ex) return false;
+          if (ex.is_circuit && !this.isLastInCircuit) return false;
+          return true;
         },
 
         get setsForCurrentEx() {
@@ -353,7 +446,14 @@
         },
 
         get targetMet() {
-          return this.setsCompleted >= (this.currentExercise?.target_sets ?? 99);
+          const ex = this.currentExercise;
+          if (!ex) return false;
+          if (ex.is_circuit) {
+            // En circuito: objetivo = 1 set en esta ronda (baseline marca el inicio)
+            const baseline = this.circuitCompletedSets[ex.name] ?? 0;
+            return this.session.filter(s => s.exercise === ex.name).length - baseline >= 1;
+          }
+          return this.setsCompleted >= (ex.target_sets ?? 99);
         },
 
         get sessionGrouped() {
@@ -374,6 +474,20 @@
         get timerProgress() {
           if (!this.timerTotal) return 0;
           return ((this.timerTotal - this.timerRemaining) / this.timerTotal) * 100;
+        },
+
+        get saveButtonLabel() {
+          if (this.advancing) return this._pendingCircuitLoop ? '⏭ Descansando...' : '⏭ Siguiente ejercicio...';
+          if (this.saveSuccess) return '✅ Serie guardada';
+          if (this.loading) return 'Guardando...';
+          const ex = this.currentExercise;
+          if (!ex) return '💾 Guardar Serie';
+          if (ex.is_circuit) {
+            if (!this.isLastInCircuit) return '💾 Guardar → siguiente';
+            if (this.circuitRound < ex.circuit_rounds) return `💾 Guardar · Descanso ${ex.circuit_rest}s`;
+            return '💾 Finalizar circuito';
+          }
+          return '💾 Guardar Serie';
         },
 
         // ── Init ────────────────────────────────────
@@ -418,16 +532,45 @@
           const exercises = this.plan?.exercises;
           if (!exercises?.length) return;
 
-          // Buscar el primer ejercicio que aún no tiene todas las series completadas
+          const circuitExs = exercises.filter(e => e.is_circuit);
+
+          // Si hay circuito: verificar si está en progreso
+          if (circuitExs.length > 0) {
+            const circuitRounds = circuitExs[0].circuit_rounds;
+            const minLogged = Math.min(
+              ...circuitExs.map(e => this.session.filter(s => s.exercise === e.name).length)
+            );
+            if (minLogged < circuitRounds) {
+              // Circuito incompleto: encontrar punto de reanudación
+              const firstCircuitIdx = exercises.findIndex(e => e.is_circuit);
+              this.circuitRound = minLogged + 1;
+              const baseline = {};
+              circuitExs.forEach(e => { baseline[e.name] = minLogged; });
+              this.circuitCompletedSets = baseline;
+
+              for (let i = 0; i < circuitExs.length; i++) {
+                const logged = this.session.filter(s => s.exercise === circuitExs[i].name).length;
+                if (logged <= minLogged) {
+                  this._loadExercise(firstCircuitIdx + i);
+                  return;
+                }
+              }
+              this._loadExercise(firstCircuitIdx);
+              return;
+            }
+          }
+
+          // Buscar primer ejercicio no completado (normal o circuito ya terminado)
           for (let i = 0; i < exercises.length; i++) {
-            const logged = this.session.filter(s => s.exercise === exercises[i].name).length;
-            if (logged < exercises[i].target_sets) {
+            const ex = exercises[i];
+            if (ex.is_circuit) continue;  // el circuito se maneja arriba
+            const logged = this.session.filter(s => s.exercise === ex.name).length;
+            if (logged < ex.target_sets) {
               this._loadExercise(i);
               return;
             }
           }
 
-          // Todos los ejercicios ya estaban completos al cargar la página
           this.sessionComplete = true;
           this.sessionWasAlreadyDone = true;
         },
@@ -438,18 +581,33 @@
           this.currentExIdx = idx;
           const ex = this.plan?.exercises?.[idx];
           if (!ex) return;
-          // Pre-llenar peso con historial y reps con objetivo máximo
+
+          // Al entrar al primer ejercicio de un circuito: inicializar estado de ronda
+          // desde los datos de sesión (robusto a recargas de página)
+          if (ex.is_circuit && ex.circuit_position === 0) {
+            const circuitExs = this.plan.exercises.filter(e => e.is_circuit);
+            const minLogged = Math.min(
+              ...circuitExs.map(e => this.session.filter(s => s.exercise === e.name).length)
+            );
+            this.circuitRound = minLogged + 1;
+            const baseline = {};
+            circuitExs.forEach(e => { baseline[e.name] = minLogged; });
+            this.circuitCompletedSets = baseline;
+          }
+
           this.weight = ex.suggested_weight > 0 ? String(ex.suggested_weight) : '';
           this.reps   = ex.reps_max ? String(ex.reps_max) : '';
           this.rir    = 2;
           this.notes  = '';
           this.error  = '';
-          // Configurar timer para este ejercicio
-          this.timerSeconds  = ex.suggested_rest;
-          this.timerRemaining = ex.suggested_rest;
-          this.timerTotal    = ex.suggested_rest;
-          this.timerActive   = false;
-          this.timerDone     = false;
+
+          const rest = (ex.suggested_rest > 0) ? ex.suggested_rest : 120;
+          this.timerSeconds   = rest;
+          this.timerRemaining = rest;
+          this.timerTotal     = rest;
+          this.timerActive    = false;
+          this.timerDone      = false;
+          this._pendingCircuitLoop = false;
           clearInterval(this._timerInterval);
         },
 
@@ -482,7 +640,6 @@
             const saved = await res.json();
             this.session.push(saved);
 
-            // Actualizar peso sugerido para la próxima serie con el que se acaba de usar
             if (this.currentExercise) {
               this.currentExercise.suggested_weight = parseFloat(this.weight) || 0;
             }
@@ -491,17 +648,51 @@
             this.rir   = 2;
             this.saveSuccess = true;
 
-            const newCount = this.session.filter(s => s.exercise === exercise).length;
-            const target   = this.currentExercise?.target_sets ?? 99;
+            const ex = this.currentExercise;
 
-            if (newCount >= target && this.isLastExercise) {
-              // Último ejercicio completado — no hay siguiente, cerrar sesión directo
-              setTimeout(() => this.finishSession(), 1500);
+            if (ex.is_circuit) {
+              const baseline = this.circuitCompletedSets[exercise] ?? 0;
+              const totalLogged = this.session.filter(s => s.exercise === exercise).length;
+              const isRoundDone = (totalLogged - baseline) >= 1;
+
+              if (!isRoundDone) {
+                // Raro: no debería pasar, pero safety
+                setTimeout(() => { this.saveSuccess = false; }, 1800);
+              } else if (!this.isLastInCircuit) {
+                // Avanzar al siguiente ejercicio del circuito inmediatamente
+                setTimeout(() => {
+                  this.saveSuccess = false;
+                  this._loadExercise(this.currentExIdx + 1);
+                }, 600);
+              } else {
+                // Último ejercicio de la ronda
+                const currentRound = baseline + 1;  // rondas completadas antes + 1
+                if (currentRound < ex.circuit_rounds) {
+                  // Hay más rondas: arrancar timer de descanso, luego volver al inicio
+                  this._pendingCircuitLoop = true;
+                  this.startTimer();
+                } else {
+                  // Circuito terminado
+                  if (this.isLastExercise) {
+                    setTimeout(() => this.finishSession(), 1500);
+                  } else {
+                    setTimeout(() => {
+                      this.saveSuccess = false;
+                      this._loadExercise(this.currentExIdx + 1);
+                    }, 1500);
+                  }
+                }
+              }
             } else {
-              setTimeout(() => { this.saveSuccess = false; }, 1800);
-              // Para series intermedias o ejercicios intermedios, arrancar el timer.
-              // Cuando el timer expire y targetMet → nextExercise() automático.
-              this.startTimer();
+              // Ejercicio normal: lógica existente
+              const newCount = this.session.filter(s => s.exercise === exercise).length;
+              const target   = ex.target_sets ?? 99;
+              if (newCount >= target && this.isLastExercise) {
+                setTimeout(() => this.finishSession(), 1500);
+              } else {
+                setTimeout(() => { this.saveSuccess = false; }, 1800);
+                this.startTimer();
+              }
             }
 
           } catch (e) {
@@ -547,8 +738,18 @@
               this.timerDone   = true;
               clearInterval(this._timerInterval);
               this.playBeep();
-              // Si el objetivo de series está cumplido, avanzar al siguiente ejercicio
-              if (this.targetMet) {
+
+              if (this._pendingCircuitLoop) {
+                // Timer entre rondas: volver al primer ejercicio del circuito
+                this._pendingCircuitLoop = false;
+                this.advancing = true;
+                const firstIdx = this.circuitFirstIdx;
+                setTimeout(() => {
+                  this.advancing = false;
+                  this._loadExercise(firstIdx);
+                }, 800);
+              } else if (this.targetMet) {
+                // Timer post-serie: avanzar al siguiente ejercicio
                 this.advancing = true;
                 setTimeout(() => {
                   this.advancing = false;
