@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from bot.storage.user_store import UserStore
+from bot.config import settings
 
 # =====================================================================
 # [CONCEPTO: Dependency Injection en FastAPI]
