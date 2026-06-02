@@ -214,9 +214,21 @@
       </div>
 
       <!-- Timer -->
-      <div class="bg-zinc-900 rounded-2xl p-4 border border-zinc-800">
+      <div class="bg-zinc-900 rounded-2xl p-4 border border-zinc-800"
+           :class="targetMet ? 'border-emerald-900/50' : 'border-zinc-800'">
         <div class="flex items-center justify-between mb-3">
-          <span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Descanso</span>
+          <div>
+            <span class="text-[10px] font-bold uppercase tracking-widest"
+                  :class="targetMet ? 'text-emerald-500' : 'text-zinc-500'"
+                  x-text="targetMet ? '⏭ SIGUIENTE EN...' : 'DESCANSO'"></span>
+            <template x-if="targetMet && !isLastExercise">
+              <p class="text-[11px] text-zinc-400 mt-0.5"
+                 x-text="plan?.exercises?.[currentExIdx + 1]?.name"></p>
+            </template>
+            <template x-if="targetMet && isLastExercise">
+              <p class="text-[11px] text-emerald-500 mt-0.5">Último ejercicio completado</p>
+            </template>
+          </div>
           <div class="flex items-center gap-2">
             <button @click="adjustTimer(-30)"
                     class="w-6 h-6 rounded-full bg-zinc-800 text-zinc-500 text-sm hover:bg-zinc-700">−</button>
@@ -478,23 +490,11 @@
             this.notes = '';
             this.rir   = 2;
             this.saveSuccess = true;
-            this.startTimer();
+            setTimeout(() => { this.saveSuccess = false; }, 1800);
 
-            // Verificar si se cumplió el objetivo de series
-            const newCount = this.session.filter(s => s.exercise === exercise).length;
-            const target   = this.currentExercise?.target_sets ?? 99;
-            if (newCount >= target) {
-              // Auto-avanzar tras 1.5s — el timer sigue corriendo para el descanso
-              this.saveSuccess = false;
-              this.advancing   = true;
-              setTimeout(() => {
-                this.advancing = false;
-                if (this.isLastExercise) this.finishSession();
-                else this.nextExercise();
-              }, 1500);
-            } else {
-              setTimeout(() => { this.saveSuccess = false; }, 2000);
-            }
+            // Siempre arranca el timer. Si es la última serie del ejercicio,
+            // el timer al llegar a 0 avanza al siguiente ejercicio automáticamente.
+            this.startTimer();
 
           } catch (e) {
             this.error = e.message || '❌ Error al guardar. Intenta de nuevo.';
@@ -539,6 +539,15 @@
               this.timerDone   = true;
               clearInterval(this._timerInterval);
               this.playBeep();
+              // Si el objetivo de series está cumplido, avanzar al siguiente ejercicio
+              if (this.targetMet) {
+                this.advancing = true;
+                setTimeout(() => {
+                  this.advancing = false;
+                  if (this.isLastExercise) this.finishSession();
+                  else this.nextExercise();
+                }, 800);
+              }
             }
           }, 1000);
         },
