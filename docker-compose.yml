@@ -17,8 +17,8 @@ services:
     env_file: .env
     ports:
       # Puerto local:puerto del contenedor
-      # El servidor FastAPI escucha aquí (para recibir webhooks de n8n)
-      - "8000:8000"
+      # El servidor FastAPI escucha aquí (para recibir webhooks de n8n y Cloudflare Tunnel)
+      - "127.0.0.1:8001:8001"
     volumes:
       # [CONCEPTO: Volumes — Persistencia de datos]
       # Sin este volume, la base de datos SQLite se pierde al reiniciar.
