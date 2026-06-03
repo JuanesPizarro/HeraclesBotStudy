@@ -294,6 +294,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("❌ Tu acceso está bloqueado.")
         return
 
+    # Guardia: si el onboarding no está completo el ConversationHandler
+    # debería haberlo interceptado primero, pero este check evita que el
+    # agente responda si por alguna razón llegó hasta acá.
+    db_user = _store.get_user(user_id)
+    if not db_user or not db_user.get("onboarding_done"):
+        await update.message.reply_text(
+            "Antes de continuar necesito conocerte un poco 👇\n"
+            "Escribí /start para completar tu perfil."
+        )
+        return
+
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action="typing",

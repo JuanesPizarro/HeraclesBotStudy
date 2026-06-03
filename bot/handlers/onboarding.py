@@ -54,6 +54,32 @@ from bot.config import settings
 _store = UserStore()
 
 
+class _NeedsOnboardingFilter(filters.MessageFilter):
+    """
+    Filtro que devuelve True solo para usuarios activos con onboarding incompleto.
+
+    [CONCEPTO: Custom MessageFilter en PTB]
+    Subclasear filters.MessageFilter permite crear condiciones de enrutamiento
+    arbitrarias basadas en el contenido del mensaje O en estado externo (DB).
+    El filtro se evalúa en check_update(), antes de ejecutar el handler.
+    Aquí lo usamos para que el ConversationHandler intercepte mensajes de
+    usuarios que no terminaron su perfil, sin afectar a los que sí lo hicieron.
+    """
+    def filter(self, message) -> bool:
+        if not message.from_user:
+            return False
+        user = _store.get_user(str(message.from_user.id))
+        if not user:
+            return False
+        return (
+            user.get("status") == "active"
+            and not bool(user.get("onboarding_done"))
+        )
+
+
+_needs_onboarding = _NeedsOnboardingFilter()
+
+
 async def _notify_admin_new_user(
     context: ContextTypes.DEFAULT_TYPE, user_id: str, user_name: str
 ) -> None:
@@ -271,12 +297,19 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return ConversationHandler.END
 
-    await update.message.reply_text(
-        f"¡Hola, {user.first_name}! 👋 Soy *Heracles*, tu entrenador personal.\n\n"
-        "Para diseñarte la mejor rutina necesito conocerte bien. "
-        "Vamos a repasar *4 puntos clave* — solo toma un par de minutos ⚡",
-        parse_mode="Markdown",
-    )
+    if is_new:
+        intro = (
+            f"¡Hola, {user.first_name}! 👋 Soy *Heracles*, tu entrenador personal.\n\n"
+            "Para diseñarte la mejor rutina necesito conocerte bien. "
+            "Vamos a repasar *4 puntos clave* — solo toma un par de minutos ⚡"
+        )
+    else:
+        intro = (
+            f"Hola {user.first_name}, todavía no terminaste tu perfil.\n\n"
+            "Necesito estos datos para poder ayudarte 💪 "
+            "Completemos los *4 puntos clave* — toma un par de minutos ⚡"
+        )
+    await update.message.reply_text(intro, parse_mode="Markdown")
     context.user_data["selected_days"] = []  # Inicializar selección vacía
     await update.message.reply_text(
         "─────────────────────────\n"
@@ -620,7 +653,19 @@ def build_onboarding_handler() -> ConversationHandler:
     # no uno por mensaje. per_message=True se usa en conversaciones donde
     # múltiples flujos paralelos pueden estar activos simultáneamente.
     return ConversationHandler(
-        entry_points=[CommandHandler("start", start_onboarding)],
+        entry_points=[
+            CommandHandler("start", start_onboarding),
+            # Cualquier texto de un usuario activo con onboarding incompleto
+            # lo redirige al flujo de onboarding en lugar del agente.
+            # [CONCEPTO: entry_point con filtro de DB]
+            # El filtro consulta SQLite en check_update() — solo True cuando
+            # onboarding_done=0 y status='active', así los usuarios con perfil
+            # completo caen al handle_message normal sin overhead extra.
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND & _needs_onboarding,
+                start_onboarding,
+            ),
+        ],
         states={
             ASK_DAYS: [
                 CallbackQueryHandler(toggle_day, pattern="^day_(?!s_)"),  # day_lun, day_mar... (no days_confirm)
