@@ -18,6 +18,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import FileResponse
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from bot.storage.user_store import UserStore
@@ -437,3 +438,138 @@ async def get_today_session(user: dict = Depends(get_current_user)) -> list:
     Alpine.js llama esto al iniciar para mostrar la sesión en curso.
     """
     return _store.get_today_workouts(user["telegram_id"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Progresión post-sesión
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_progression_prompt(
+    user: dict,
+    today_sets: list[dict],
+    history: dict[str, list[dict]],
+) -> str:
+    """
+    Construye el contexto para que el agente calcule la progresión de carga.
+
+    [CONCEPTO: Agente como experto — sin reglas hardcodeadas]
+    Le pasamos datos crudos (series, RIR, historial) y el perfil del usuario.
+    El agente usa su conocimiento de entrenamiento para decidir la carga,
+    pudiendo aplicar periodización, gestión de fatiga u otras consideraciones
+    que reglas determinísticas no capturarían.
+    """
+    today_by_ex: dict[str, list[dict]] = {}
+    for s in today_sets:
+        today_by_ex.setdefault(s["exercise"], []).append(s)
+
+    lines_today = []
+    for ex, sets in today_by_ex.items():
+        series_str = "  ".join(
+            f"S{i+1}: {s['reps']}r @{s['weight_kg']}kg"
+            + (f" RIR{s['rir']}" if s.get("rir") is not None else "")
+            for i, s in enumerate(sets)
+        )
+        lines_today.append(f"• {ex}: {series_str}")
+
+    lines_hist = []
+    for ex, records in history.items():
+        if not records:
+            continue
+        rec_str = " | ".join(
+            f"{r['reps']}r @{r['weight_kg']}kg"
+            + (f" RIR{r['rir']}" if r.get("rir") is not None else "")
+            + f" [{r['session_date']}]"
+            for r in records
+        )
+        lines_hist.append(f"• {ex}: {rec_str}")
+
+    return f"""Eres Heracles, entrenador experto en fuerza e hipertrofia.
+
+PERFIL DEL USUARIO:
+• Nombre: {user.get('name', '?')}
+• Objetivo: {user.get('goal', '?')}
+• Nivel: {user.get('experience_level', '?')}
+• Equipamiento: {user.get('home_equipment_detail') or user.get('equipment', '?')}
+
+SESIÓN COMPLETADA HOY:
+{chr(10).join(lines_today) or 'Sin series registradas'}
+
+HISTORIAL RECIENTE (últimas sesiones registradas por ejercicio):
+{chr(10).join(lines_hist) or 'Sin historial previo'}
+
+Basándote en tu criterio como entrenador experto, el perfil del usuario,
+el rendimiento de hoy (series, repeticiones y RIR) y la tendencia del historial,
+calcula el peso que debería usar en la PRÓXIMA sesión para cada ejercicio.
+
+Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown:
+[
+  {{"exercise": "nombre exacto del ejercicio", "next_weight": 32.5, "basis": "justificación breve en ≤10 palabras"}},
+  ...
+]"""
+
+
+@router.post("/api/session/finish")
+async def finish_session(user: dict = Depends(get_current_user)) -> dict:
+    """
+    Calcula y persiste la progresión de carga para la próxima sesión.
+
+    Flujo:
+    1. Series completadas hoy → agrupadas por ejercicio
+    2. Historial de las últimas 5 sesiones por ejercicio
+    3. Agente LLM analiza y devuelve JSON con next_weight por ejercicio
+    4. Persistir en progression_targets — próxima sesión ya lleva el peso progresado
+    5. Devolver sugerencias al frontend para mostrar en el resumen
+
+    [CONCEPTO: LLM directo vs LangGraph para tareas de análisis]
+    Para análisis de una sola pasada sin tool calls ni memoria conversacional,
+    invocar el LLM directamente es más rápido y limpio que pasarlo por el grafo.
+    LangGraph aporta valor cuando hay ciclos razonamiento ↔ herramientas.
+    """
+    from langchain_openai import ChatOpenAI
+    import json as _json
+
+    uid = user["telegram_id"]
+    tz = zoneinfo.ZoneInfo(settings.TIMEZONE)
+    today_str = datetime.datetime.now(tz).date().strftime("%Y-%m-%d")
+
+    today_sets = _store.get_today_workouts(uid)
+    if not today_sets:
+        return {"suggestions": []}
+
+    exercise_names = list({s["exercise"] for s in today_sets})
+    history = _store.get_history_for_exercises(uid, exercise_names, per_exercise=5)
+
+    prompt = _build_progression_prompt(user, today_sets, history)
+
+    llm = ChatOpenAI(
+        model="deepseek-chat",
+        openai_api_key=settings.DEEPSEEK_API_KEY,
+        openai_api_base="https://api.deepseek.com",
+        temperature=0.2,  # baja temperatura para respuestas consistentes en cálculos
+    )
+
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    raw = response.content.strip()
+
+    # Limpiar posible bloque ```json ... ``` que el LLM a veces agrega
+    try:
+        if "```" in raw:
+            raw = raw.split("```")[1].lstrip("json").strip()
+        suggestions: list[dict] = _json.loads(raw)
+    except Exception:
+        return {"suggestions": [], "error": "No se pudo parsear la respuesta del agente"}
+
+    # Persistir cada sugerencia
+    for item in suggestions:
+        ex = item.get("exercise", "").strip()
+        nw = item.get("next_weight")
+        if ex and nw is not None:
+            _store.save_progression_target(
+                user_id=uid,
+                exercise=ex,
+                next_weight=float(nw),
+                basis=item.get("basis", ""),
+                session_date=today_str,
+            )
+
+    return {"suggestions": suggestions}

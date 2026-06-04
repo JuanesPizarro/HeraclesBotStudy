@@ -66,13 +66,14 @@
     </div>
 
     <!-- ── SESIÓN COMPLETADA ────────────────────────────── -->
-    <div x-show="!loading && sessionComplete" class="flex-1 flex flex-col items-center justify-center px-4 space-y-5">
-      <div class="text-5xl" x-text="sessionWasAlreadyDone ? '✅' : '🏆'"></div>
+    <div x-show="!loading && sessionComplete" class="flex-1 flex flex-col px-4 pt-6 pb-8 space-y-5">
       <div class="text-center">
+        <div class="text-5xl mb-2" x-text="sessionWasAlreadyDone ? '✅' : '🏆'"></div>
         <p class="text-xl font-bold text-emerald-400"
            x-text="sessionWasAlreadyDone ? 'Ya completaste tu sesión de hoy' : '¡Sesión completada!'"></p>
         <p class="text-zinc-500 text-sm mt-1" x-text="plan?.day_name"></p>
       </div>
+
       <!-- Resumen por ejercicio -->
       <div class="w-full space-y-3">
         <template x-for="group in sessionGrouped" :key="group.exercise">
@@ -95,7 +96,44 @@
           </div>
         </template>
       </div>
-      <p class="text-zinc-600 text-xs" x-text="session.length + ' series registradas'"></p>
+      <p class="text-zinc-600 text-xs text-center" x-text="session.length + ' series registradas'"></p>
+
+      <!-- Progresión sugerida para la próxima sesión -->
+      <div class="w-full">
+        <!-- Calculando -->
+        <div x-show="progressionLoading" class="text-center py-4">
+          <p class="text-zinc-500 text-xs animate-pulse">Calculando progresión para la próxima sesión...</p>
+        </div>
+
+        <!-- Sugerencias disponibles -->
+        <template x-if="progression && progression.length > 0">
+          <div class="bg-zinc-900 rounded-2xl border border-indigo-900/50 overflow-hidden">
+            <div class="px-4 py-3 border-b border-zinc-800">
+              <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Próxima sesión — Carga sugerida</p>
+            </div>
+            <div class="divide-y divide-zinc-800">
+              <template x-for="item in progression" :key="item.exercise">
+                <div class="px-4 py-2.5 flex items-center gap-3">
+                  <div class="flex-1 min-w-0">
+                    <p class="text-xs font-semibold text-zinc-200 truncate" x-text="item.exercise"></p>
+                    <p class="text-[10px] text-zinc-500 mt-0.5 leading-snug" x-text="item.basis"></p>
+                  </div>
+                  <div class="flex-shrink-0 text-right">
+                    <span class="text-sm font-bold"
+                          :class="item.next_weight > 0 ? 'text-indigo-400' : 'text-zinc-500'"
+                          x-text="item.next_weight === 0 ? 'PC' : item.next_weight + ' kg'"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <!-- Error al calcular -->
+        <template x-if="progressionError">
+          <p class="text-zinc-600 text-xs text-center" x-text="progressionError"></p>
+        </template>
+      </div>
     </div>
 
     <!-- ── ENTRENAMIENTO ACTIVO ────────────────────────── -->
@@ -377,6 +415,11 @@
         saveSuccess: false,
         advancing: false,
         error: '',
+
+        // ── Progresión post-sesión ──────────────────
+        progression: null,
+        progressionLoading: false,
+        progressionError: null,
 
         // ── Cronómetro ──────────────────────────────
         timerSeconds: 120,
@@ -720,6 +763,31 @@
         finishSession() {
           clearInterval(this._timerInterval);
           this.sessionComplete = true;
+          // Calcular progresión solo cuando se acaba de completar (no al recargar)
+          if (!this.sessionWasAlreadyDone) {
+            this.fetchProgression();
+          }
+        },
+
+        async fetchProgression() {
+          this.progressionLoading = true;
+          this.progressionError = null;
+          try {
+            const res = await fetch(`/api/session/finish?token=${this.token}`, {
+              method: 'POST',
+            });
+            if (!res.ok) throw new Error('Error al calcular progresión');
+            const data = await res.json();
+            if (data.error) {
+              this.progressionError = 'No se pudo calcular la progresión';
+            } else {
+              this.progression = data.suggestions || [];
+            }
+          } catch (_) {
+            this.progressionError = 'No se pudo calcular la progresión';
+          } finally {
+            this.progressionLoading = false;
+          }
         },
 
         // ── Cronómetro ───────────────────────────────

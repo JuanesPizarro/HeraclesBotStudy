@@ -118,6 +118,28 @@ class UserStore:
 
                 CREATE INDEX IF NOT EXISTS idx_overrides_user_date
                     ON session_overrides(user_id, target_date);
+
+                -- =====================================================================
+                -- [CONCEPTO: Tabla de objetivos de progresión por ejercicio]
+                --
+                -- El agente calcula al final de cada sesión el peso sugerido para
+                -- la próxima vez que se entrene ese ejercicio y lo persiste aquí.
+                -- next_weight tiene prioridad sobre el último peso en workouts cuando
+                -- se pre-carga el input de la app web.
+                --
+                -- Diseño PRIMARY KEY (user_id, exercise): un objetivo por ejercicio
+                -- por usuario. INSERT OR REPLACE sobreescribe cuando hay sesión nueva.
+                -- =====================================================================
+                CREATE TABLE IF NOT EXISTS progression_targets (
+                    user_id      TEXT NOT NULL,
+                    exercise     TEXT NOT NULL,
+                    next_weight  REAL NOT NULL,
+                    basis        TEXT,
+                    session_date TEXT NOT NULL,
+                    updated_at   TEXT DEFAULT (datetime('now')),
+                    PRIMARY KEY (user_id, exercise),
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+                );
             """)
         # [CONCEPTO: Migraciones incrementales]
         # En producción se usa Alembic o herramientas similares para gestionar
@@ -331,15 +353,88 @@ class UserStore:
             )
         return token
 
+    def get_history_for_exercises(
+        self, user_id: str, exercise_names: list[str], per_exercise: int = 5
+    ) -> dict[str, list[dict]]:
+        """
+        Devuelve los últimos N registros de cada ejercicio solicitado.
+
+        [CONCEPTO: Query con IN dinámico en SQLite]
+        Generamos los placeholders (?,?,…) según la cantidad de ejercicios
+        para pasarlos como parámetros seguros (evita SQL injection).
+        La agrupación en Python garantiza exactamente per_exercise filas
+        por ejercicio aunque la query devuelva más.
+        """
+        if not exercise_names:
+            return {}
+        placeholders = ",".join("?" * len(exercise_names))
+        lower_names = [n.lower() for n in exercise_names]
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"""SELECT exercise, weight_kg, reps, rir, sets,
+                           DATE(logged_at, 'localtime') AS session_date
+                    FROM workouts
+                    WHERE user_id = ? AND LOWER(exercise) IN ({placeholders})
+                    ORDER BY logged_at DESC""",
+                (user_id, *lower_names),
+            ).fetchall()
+
+        result: dict[str, list[dict]] = {n: [] for n in exercise_names}
+        for row in rows:
+            for original_name in exercise_names:
+                if row["exercise"].lower() == original_name.lower():
+                    if len(result[original_name]) < per_exercise:
+                        result[original_name].append(dict(row))
+                    break
+        return result
+
+    def save_progression_target(
+        self,
+        user_id: str,
+        exercise: str,
+        next_weight: float,
+        basis: str,
+        session_date: str,
+    ) -> None:
+        """
+        Persiste el peso sugerido para la próxima sesión de un ejercicio.
+        INSERT OR REPLACE sobreescribe el registro anterior del mismo ejercicio.
+        """
+        with self._get_conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO progression_targets
+                   (user_id, exercise, next_weight, basis, session_date, updated_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+                (user_id, exercise, next_weight, basis, session_date),
+            )
+
+    def get_progression_target(self, user_id: str, exercise: str) -> dict | None:
+        """Devuelve el objetivo de progresión guardado para un ejercicio, si existe."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT next_weight, basis, session_date
+                   FROM progression_targets
+                   WHERE user_id = ? AND LOWER(exercise) = LOWER(?)""",
+                (user_id, exercise),
+            ).fetchone()
+            return dict(row) if row else None
+
     def get_last_weight_for_exercise(self, user_id: str, exercise: str) -> float | None:
         """
-        Devuelve el último peso registrado para un ejercicio específico.
+        Devuelve el peso sugerido para la próxima sesión de un ejercicio.
 
-        [CONCEPTO: Sugerencia de carga progresiva]
-        Pre-llenar el peso con el último valor registrado elimina fricción:
-        el usuario parte del punto exacto donde lo dejó, solo ajusta si cambia.
-        Busca el ejercicio más reciente ignorando mayúsculas/minúsculas.
+        Prioridad:
+          1. progression_targets.next_weight  → calculado por el agente al final
+             de la última sesión (incluye progresión aplicada)
+          2. Último weight_kg de workouts      → fallback si aún no hay target
+
+        [CONCEPTO: Sugerencia de carga progresiva con progresión persistida]
+        Al tener un target guardado, el usuario llega a la siguiente sesión con
+        el peso ya actualizado — sin tener que recordarlo ni calcularlo a mano.
         """
+        target = self.get_progression_target(user_id, exercise)
+        if target is not None:
+            return target["next_weight"]
         with self._get_conn() as conn:
             row = conn.execute(
                 """SELECT weight_kg FROM workouts
