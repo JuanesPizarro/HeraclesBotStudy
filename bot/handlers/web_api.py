@@ -407,6 +407,20 @@ async def get_session_plan(user: dict = Depends(get_current_user)) -> dict:
         (ov for ov in overrides if ov["target_date"] == today_str), None
     )
 
+    # Si el override describe una sesión alternativa con ejercicios estructurados,
+    # reemplazar el plan base por esa lista.
+    # _parse_session_exercises detecta bullets "• Nombre: SxR" — si el agente
+    # redactó el override con esa estructura, se parsea directo; si solo es una
+    # descripción de texto, devuelve [] y se mantiene la rutina original.
+    if today_override:
+        override_exercises = _parse_session_exercises(today_override["modification"])
+        if override_exercises:
+            exercises = override_exercises
+            for ex in exercises:
+                last = _store.get_last_weight_for_exercise(uid, ex["name"])
+                if last is not None:
+                    ex["suggested_weight"] = last
+
     return {
         "is_rest_day": False,
         "today_day": today_day,
