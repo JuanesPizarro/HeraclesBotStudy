@@ -534,15 +534,20 @@ class UserStore:
         7 días es suficiente para que el agente vea cambios de "esta semana"
         sin cargar demasiado el system prompt con datos irrelevantes.
         """
+        from bot.config import settings as _settings
+        import datetime as _dt, zoneinfo as _zi
+        tz = _zi.ZoneInfo(_settings.TIMEZONE)
+        today_str = _dt.datetime.now(tz).date().strftime("%Y-%m-%d")
+        next_week_str = (_dt.datetime.now(tz).date() + _dt.timedelta(days=7)).strftime("%Y-%m-%d")
         with self._get_conn() as conn:
             rows = conn.execute(
                 """SELECT target_date, scope, modification, reason
                    FROM session_overrides
                    WHERE user_id = ?
-                     AND target_date >= DATE('now')
-                     AND target_date <= DATE('now', '+7 days')
+                     AND target_date >= ?
+                     AND target_date <= ?
                    ORDER BY target_date ASC""",
-                (user_id,),
+                (user_id, today_str, next_week_str),
             ).fetchall()
             return [dict(row) for row in rows]
 
