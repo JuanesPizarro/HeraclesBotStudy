@@ -368,7 +368,25 @@ async def get_session_plan(user: dict = Depends(get_current_user)) -> dict:
     ]
     is_training_day = today_day in training_days
 
-    if not is_training_day:
+    # Verificar overrides ANTES de decidir si es día de descanso.
+    # Un override puede mover una sesión a un día que normalmente es descanso
+    # (ej: bot pasa la sesión del viernes al sábado). En ese caso la app debe
+    # mostrar la sesión aunque sábado no esté en training_days.
+    today_str = today.strftime("%Y-%m-%d")
+    overrides = _store.get_active_overrides(uid)
+    today_override = next(
+        (ov for ov in overrides if ov["target_date"] == today_str), None
+    )
+
+    # Un override con ejercicios estructurados convierte cualquier día en día de
+    # entrenamiento; un override de texto (sin bullets SxR) no lo hace.
+    override_exercises: list[dict] = []
+    if today_override:
+        override_exercises = _parse_session_exercises(today_override["modification"])
+
+    has_override_session = bool(override_exercises)
+
+    if not is_training_day and not has_override_session:
         # Calcular próximo día de entrenamiento
         next_day = None
         today_idx = _DAYS_ES.index(today_day)
@@ -383,12 +401,12 @@ async def get_session_plan(user: dict = Depends(get_current_user)) -> dict:
             "next_training_day": next_day,
         }
 
-    # Día de entrenamiento: extraer plan
+    # Día de entrenamiento: extraer plan de la rutina base
     routine = _store.get_active_routine(uid)
     exercises: list[dict] = []
     day_name = ""
 
-    if routine:
+    if routine and is_training_day:
         section = _extract_day_section(routine["routine_text"], today_day)
         if section:
             # Extraer nombre del bloque (primera línea: "📋 DÍA 2 — TRACCIÓN (Martes)")
@@ -401,26 +419,15 @@ async def get_session_plan(user: dict = Depends(get_current_user)) -> dict:
                 if last is not None:
                     ex["suggested_weight"] = last
 
-    # Override activo para hoy
-    today_str = today.strftime("%Y-%m-%d")
-    overrides = _store.get_active_overrides(uid)
-    today_override = next(
-        (ov for ov in overrides if ov["target_date"] == today_str), None
-    )
-
-    # Si el override describe una sesión alternativa con ejercicios estructurados,
-    # reemplazar el plan base por esa lista.
-    # _parse_session_exercises detecta bullets "• Nombre: SxR" — si el agente
-    # redactó el override con esa estructura, se parsea directo; si solo es una
-    # descripción de texto, devuelve [] y se mantiene la rutina original.
-    if today_override:
-        override_exercises = _parse_session_exercises(today_override["modification"])
-        if override_exercises:
-            exercises = override_exercises
-            for ex in exercises:
-                last = _store.get_last_weight_for_exercise(uid, ex["name"])
-                if last is not None:
-                    ex["suggested_weight"] = last
+    # Si el override tiene ejercicios estructurados, reemplaza el plan base.
+    # Aplica tanto en días normales (sesión modificada) como en días de descanso
+    # (sesión movida desde otro día).
+    if has_override_session:
+        exercises = override_exercises
+        for ex in exercises:
+            last = _store.get_last_weight_for_exercise(uid, ex["name"])
+            if last is not None:
+                ex["suggested_weight"] = last
 
     return {
         "is_rest_day": False,
