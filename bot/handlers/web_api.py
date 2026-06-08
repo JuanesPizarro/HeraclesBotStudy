@@ -498,6 +498,15 @@ PERFIL DEL USUARIO:
 • Nivel: {user.get('experience_level', '?')}
 • Equipamiento: {user.get('home_equipment_detail') or user.get('equipment', '?')}
 
+ESCALA RIR (Repeticiones en Recámara) — IMPORTANTE:
+RIR 0 = fallo total (0 reps restantes, máximo esfuerzo)
+RIR 1 = 1 rep restante, muy cerca del fallo
+RIR 2 = 2 reps restantes, buena intensidad
+RIR 3 = 3 reps restantes
+RIR 4 = 4 reps restantes
+RIR 5 = 5+ reps restantes, muy fácil/liviano
+→ RIR bajo (0-2) = peso desafiante. RIR alto (4-5) = peso demasiado liviano, subir carga.
+
 SESIÓN COMPLETADA HOY:
 {chr(10).join(lines_today) or 'Sin series registradas'}
 
