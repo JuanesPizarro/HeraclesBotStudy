@@ -176,6 +176,9 @@ class UserStore:
             ("rir",   "INTEGER"),   # Repeticiones en Recámara (0 = fallo, 5 = muy cómodo)
             ("notes", "TEXT"),      # Sensaciones / observaciones de la serie
         ]
+        new_progression_columns = [
+            ("next_reps", "TEXT"),  # Reps sugeridas por el agente (ej: "8-10", "3x10")
+        ]
         with self._get_conn() as conn:
             existing_users = {
                 row[1] for row in conn.execute("PRAGMA table_info(users)")
@@ -192,6 +195,14 @@ class UserStore:
                 if col_name not in existing_workouts:
                     conn.execute(
                         f"ALTER TABLE workouts ADD COLUMN {col_name} {col_type}"
+                    )
+            existing_progression = {
+                row[1] for row in conn.execute("PRAGMA table_info(progression_targets)")
+            }
+            for col_name, col_type in new_progression_columns:
+                if col_name not in existing_progression:
+                    conn.execute(
+                        f"ALTER TABLE progression_targets ADD COLUMN {col_name} {col_type}"
                     )
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_web_token ON users(web_token)"
@@ -395,24 +406,25 @@ class UserStore:
         next_weight: float,
         basis: str,
         session_date: str,
+        next_reps: str | None = None,
     ) -> None:
         """
-        Persiste el peso sugerido para la próxima sesión de un ejercicio.
+        Persiste el peso y las reps sugeridas para la próxima sesión de un ejercicio.
         INSERT OR REPLACE sobreescribe el registro anterior del mismo ejercicio.
         """
         with self._get_conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO progression_targets
-                   (user_id, exercise, next_weight, basis, session_date, updated_at)
-                   VALUES (?, ?, ?, ?, ?, datetime('now'))""",
-                (user_id, exercise, next_weight, basis, session_date),
+                   (user_id, exercise, next_weight, next_reps, basis, session_date, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                (user_id, exercise, next_weight, next_reps, basis, session_date),
             )
 
     def get_progression_target(self, user_id: str, exercise: str) -> dict | None:
         """Devuelve el objetivo de progresión guardado para un ejercicio, si existe."""
         with self._get_conn() as conn:
             row = conn.execute(
-                """SELECT next_weight, basis, session_date
+                """SELECT next_weight, next_reps, basis, session_date
                    FROM progression_targets
                    WHERE user_id = ? AND LOWER(exercise) = LOWER(?)""",
                 (user_id, exercise),

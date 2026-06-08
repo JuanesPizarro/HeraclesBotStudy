@@ -244,7 +244,9 @@
               <button @click="weight = ((parseFloat(weight)||0) + 2.5).toFixed(1)"
                       class="w-10 h-11 flex-shrink-0 bg-zinc-800 rounded-xl text-zinc-400 text-xl font-bold hover:bg-zinc-700 active:scale-95 transition-all">+</button>
             </div>
-            <p class="text-[10px] text-zinc-700 mt-1 text-center">0 = peso corporal</p>
+            <p class="text-[10px] mt-1 text-center"
+               :class="currentExercise?.suggested_weight > 0 ? 'text-indigo-400' : 'text-zinc-700'"
+               x-text="currentExercise?.suggested_weight > 0 ? ('↑ ' + currentExercise.suggested_weight + ' kg sugerido') : '0 = peso corporal'"></p>
           </div>
           <div>
             <label class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Reps</label>
@@ -256,6 +258,9 @@
               <button @click="reps = ((parseInt(reps)||0) + 1).toString()"
                       class="w-10 h-11 flex-shrink-0 bg-zinc-800 rounded-xl text-zinc-400 text-xl font-bold hover:bg-zinc-700 active:scale-95 transition-all">+</button>
             </div>
+            <p class="text-[10px] mt-1 text-center"
+               :class="currentExercise?.suggested_reps ? 'text-indigo-400' : 'text-zinc-700'"
+               x-text="currentExercise?.suggested_reps ? ('↑ ' + currentExercise.suggested_reps + ' reps sugerido') : ''"></p>
           </div>
         </div>
 
@@ -639,7 +644,13 @@
           }
 
           this.weight = ex.suggested_weight > 0 ? String(ex.suggested_weight) : '';
-          this.reps   = ex.reps_max ? String(ex.reps_max) : '';
+          // Pre-cargar reps desde sugerencia del agente si existe, si no desde rutina
+          if (ex.suggested_reps) {
+            const nums = ex.suggested_reps.match(/\d+/g);
+            this.reps = nums ? String(nums[nums.length - 1]) : (ex.reps_max ? String(ex.reps_max) : '');
+          } else {
+            this.reps = ex.reps_max ? String(ex.reps_max) : '';
+          }
           this.rir    = 2;
           this.notes  = '';
           this.error  = '';

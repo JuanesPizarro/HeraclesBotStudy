@@ -233,6 +233,24 @@ def _parse_exercises(routine_text: str) -> list[str]:
     return list(dict.fromkeys(exercises))
 
 
+def _apply_progression_targets(uid: str, exercises: list[dict]) -> None:
+    """
+    Sobrescribe suggested_weight y suggested_reps en cada ejercicio con los
+    valores calculados por el agente al final de la última sesión.
+    Si no hay target guardado, cae al último peso registrado en workouts.
+    """
+    for ex in exercises:
+        target = _store.get_progression_target(uid, ex["name"])
+        if target is not None:
+            ex["suggested_weight"] = target["next_weight"]
+            if target.get("next_reps"):
+                ex["suggested_reps"] = target["next_reps"]
+        else:
+            last = _store.get_last_weight_for_exercise(uid, ex["name"])
+            if last is not None:
+                ex["suggested_weight"] = last
+
+
 def get_current_user(token: str = Query(..., description="web_token personal del usuario")) -> dict:
     """
     Dependencia FastAPI: valida el web_token y devuelve el perfil del usuario.
@@ -413,21 +431,14 @@ async def get_session_plan(user: dict = Depends(get_current_user)) -> dict:
             first_line = section.split("\n")[0].strip()
             day_name = re.sub(r"^[^\w]+", "", first_line).strip()  # quitar emojis/separadores
             exercises = _parse_session_exercises(section)
-            # Pre-llenar último peso registrado para cada ejercicio
-            for ex in exercises:
-                last = _store.get_last_weight_for_exercise(uid, ex["name"])
-                if last is not None:
-                    ex["suggested_weight"] = last
+            _apply_progression_targets(uid, exercises)
 
     # Si el override tiene ejercicios estructurados, reemplaza el plan base.
     # Aplica tanto en días normales (sesión modificada) como en días de descanso
     # (sesión movida desde otro día).
     if has_override_session:
         exercises = override_exercises
-        for ex in exercises:
-            last = _store.get_last_weight_for_exercise(uid, ex["name"])
-            if last is not None:
-                ex["suggested_weight"] = last
+        _apply_progression_targets(uid, exercises)
 
     return {
         "is_rest_day": False,
@@ -519,9 +530,11 @@ calcula el peso que debería usar en la PRÓXIMA sesión para cada ejercicio.
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown:
 [
-  {{"exercise": "nombre exacto del ejercicio", "next_weight": 32.5, "basis": "justificación breve en ≤10 palabras"}},
+  {{"exercise": "nombre exacto del ejercicio", "next_weight": 32.5, "next_reps": "8-10", "basis": "justificación breve en ≤10 palabras"}},
   ...
-]"""
+]
+next_reps es el rango de reps recomendado para la próxima sesión (ej: "8-10", "10-12", "3x8").
+Si el rango actual es correcto, repite el mismo valor."""
 
 
 @router.post("/api/session/finish")
@@ -586,6 +599,7 @@ async def finish_session(user: dict = Depends(get_current_user)) -> dict:
                 next_weight=float(nw),
                 basis=item.get("basis", ""),
                 session_date=today_str,
+                next_reps=item.get("next_reps") or None,
             )
 
     return {"suggestions": suggestions}
