@@ -6,8 +6,14 @@ Arranca dos servicios concurrentemente:
   2. Servidor FastAPI (uvicorn) — recibe webhooks de n8n
 """
 import asyncio
+import logging
 import uvicorn
 from fastapi import FastAPI
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    level=logging.WARNING,
+)
 
 from bot.config import settings
 from bot.handlers.telegram import create_telegram_app

@@ -38,6 +38,8 @@
 # Aprende más: https://docs.python-telegram-bot.org/en/stable/telegram.ext.conversationhandler.html
 # =====================================================================
 
+import logging
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ConversationHandler,
@@ -51,6 +53,7 @@ from telegram.ext import (
 from bot.storage.user_store import UserStore
 from bot.config import settings
 
+logger = logging.getLogger(__name__)
 _store = UserStore()
 
 
@@ -257,6 +260,7 @@ LEVEL_TEST_KEYBOARD = InlineKeyboardMarkup([
 async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Entry point: valida acceso y lanza el onboarding o saluda.
+    [DEBUG] Log temporal para diagnosticar inicio de onboarding.
 
     [CONCEPTO: Control de acceso en el entry point]
     Verificamos el status ANTES de cualquier lógica de onboarding.
@@ -265,6 +269,7 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """
     user = update.effective_user
     user_id = str(user.id)
+    logger.warning("DEBUG start_onboarding: user=%s via=%s", user_id, type(update.effective_message).__name__)
     is_new = _store.upsert_user(user_id, user.first_name)
 
     # El admin se auto-aprueba siempre
@@ -330,12 +335,14 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Alterna la selección de un día. Reconstruye el teclado con el nuevo estado.
+    [DEBUG] Log temporal para diagnosticar callbacks de días.
 
     [CONCEPTO: callback_query.edit_message_reply_markup]
     A diferencia de edit_message_text (que reescribe todo el mensaje),
     edit_message_reply_markup solo actualiza los botones. Más eficiente
     y preserva el texto original.
     """
+    logger.warning("DEBUG toggle_day: data=%s user=%s", update.callback_query.data, update.effective_user.id)
     query = update.callback_query
     await query.answer()
 
