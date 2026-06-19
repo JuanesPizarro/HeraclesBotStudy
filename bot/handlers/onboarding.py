@@ -697,8 +697,14 @@ def build_onboarding_handler() -> ConversationHandler:
             ],
         },
         fallbacks=[
+            # /start en medio del flujo reinicia el onboarding desde el principio
+            CommandHandler("start", start_onboarding),
             MessageHandler(filters.TEXT & ~filters.COMMAND, onboarding_fallback),
         ],
-        allow_reentry=True,
+        # allow_reentry=False (default): con la conversación activa, los entry_points
+        # NO se evalúan. Esto evita que _needs_onboarding reinicie el flujo cuando el
+        # usuario escribe texto en ASK_HOME_EQUIPMENT o ASK_LIMITATIONS.
+        # /start sigue funcionando como re-entrada vía el CommandHandler en fallbacks.
+        allow_reentry=False,
         per_message=False,
     )

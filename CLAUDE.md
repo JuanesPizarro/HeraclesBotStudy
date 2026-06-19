@@ -17,7 +17,7 @@ Diseñado con mentalidad SaaS desde el inicio: costos mínimos de LLM, arquitect
 | DB | SQLite (sqlite3 built-in) | Simple, sin dependencias extra |
 | Automatización | n8n (Docker) | Recordatorios programados via webhook |
 | Túnel | Cloudflare Tunnel | Expone el servidor local con HTTPS vía dominio propio |
-| Deploy | Docker Compose | Levanta bot + n8n con un comando |
+| Deploy | Docker Compose + Oracle Cloud Free Tier | VM siempre activa, SQLite persistente |
 
 ## Arquitectura en capas (mentalidad SaaS)
 
@@ -28,29 +28,41 @@ Canal Telegram
         ├── /historial ───────────────► SQLite → respuesta       (0 LLM calls)
         ├── /webapp ──────────────────► genera web_token → URL   (0 LLM calls)
         ├── /start ───────────────────► onboarding FSM           (0 LLM calls)
-        │
+        │                               (bloquea agente hasta completar)
         └── texto libre
                 │
                 ▼
+        _NeedsOnboardingFilter → si onboarding incompleto → redirige a /start
+                │
+                ▼
         Preparar contexto (Python, 0 costo)
-          perfil + rutina activa + últimos entrenamientos
+          perfil + rutina activa + últimos entrenamientos + overrides
                 │
                 ▼
         Agente LangGraph — system prompt con contexto inyectado
           tools disponibles (solo escritura):
-            • save_workout   → usuario reportó un ejercicio
-            • update_goal    → usuario cambió su objetivo
+            • save_workout        → usuario reportó un ejercicio
+            • update_goal         → usuario cambió su objetivo
+            • update_equipment    → usuario actualizó su equipamiento
+            • log_session_override → modificación temporal de sesión
                 │
                 ├── sin tool calls → END              (1 LLM call)
                 └── con tool calls → tools → agent   (2 LLM calls)
 
-Canal Web (https://dominio.com/app?token=xxx)
+Canal Web (https://gym.perritoemo.online/app?token=xxx)
         │
-        ├── GET /api/session/plan   → plan guiado del día (ejercicios ordenados,
-        │                             peso sugerido del historial, descanso por rango de reps)
-        ├── GET /api/session/me     → perfil del usuario               (0 LLM calls)
-        ├── POST /api/session/set   → guardar serie (peso/reps/RIR)   (0 LLM calls)
-        └── GET /api/session/today  → log de la sesión actual         (0 LLM calls)
+        ├── GET  /api/session/plan    → plan del día; si hay override con ejercicios
+        │                               estructurados, los aplica sobre la rutina base
+        ├── GET  /api/session/me      → perfil del usuario               (0 LLM calls)
+        ├── POST /api/session/set     → guardar serie (peso/reps/RIR)   (0 LLM calls)
+        ├── GET  /api/session/today   → log de la sesión actual         (0 LLM calls)
+        └── POST /api/session/finish  → agente calcula progresión de carga
+                                        y persiste en progression_targets (1 LLM call)
+
+Canal n8n (webhook automation)
+        │
+        └── POST /webhook/n8n/reminder → recibe mensaje + user_ids y envía
+                                          notificaciones Telegram
 ```
 
 ### Principios de costo
@@ -61,6 +73,8 @@ Canal Web (https://dominio.com/app?token=xxx)
   Costo extra: 0 llamadas al LLM.
 - **Comandos directos a DB**: `/rutina` e `/historial` nunca pasan por el agente.
 - **App web = 0 LLM calls**: el registro de sesiones es 100% código Python + SQLite.
+- **Progresión post-sesión = 1 LLM call directo**: sin LangGraph ni tool calls,
+  solo análisis con historial por ejercicio.
 
 ### Flujo del agente LangGraph
 ```
@@ -76,31 +90,47 @@ bot/
 ├── main.py                 # Entry point — asyncio.gather(bot + servidor)
 ├── agent/
 │   ├── state.py            # AgentState TypedDict (messages + user_id)
-│   ├── tools.py            # save_workout, update_goal, log_session_override
-│   ├── nodes.py            # agent_node con contexto: fecha de hoy, sesión del día,
-│   │                       # overrides activos, sección de rutina correspondiente
+│   ├── tools.py            # save_workout, update_goal, update_equipment,
+│   │                       # log_session_override
+│   ├── nodes.py            # agent_node — contexto completo inyectado:
+│   │                       #   fecha actual (REFERENCIA ABSOLUTA), sesión del día,
+│   │                       #   overrides activos, perfil, rutina, historial
+│   │                       # Guardrails: formato (sin tablas/headers), alcance
+│   │                       # (solo entrenamiento), validación de equipamiento,
+│   │                       # español neutro (sin modismos regionales)
 │   └── graph.py            # StateGraph compilado con MemorySaver
 ├── handlers/
 │   ├── telegram.py         # /start, /rutina, /historial, /webapp, /ayuda
-│   │                       # handle_message + _extract_and_save_routine()
-│   ├── onboarding.py       # ConversationHandler FSM — paso 1 usa multi-select
-│   │                       # de días específicos (Lun/Mar/..) en lugar de cantidad
+│   │                       # handle_message (con guardia de onboarding)
+│   │                       # + _extract_and_save_routine()
+│   ├── onboarding.py       # ConversationHandler FSM — 9 pasos
+│   │                       # _NeedsOnboardingFilter: intercepta mensajes de usuarios
+│   │                       # con onboarding incompleto antes de llegar al agente
 │   ├── n8n_webhook.py      # POST /webhook/n8n/reminder
 │   └── web_api.py          # Endpoints web:
 │                           #   GET  /app                  → sirve workout.html
-│                           #   GET  /api/session/plan     → plan guiado del día
+│                           #   GET  /api/session/plan     → plan del día
+│                           #                               (aplica override si tiene
+│                           #                                ejercicios estructurados)
 │                           #   GET  /api/session/me       → perfil del usuario
 │                           #   POST /api/session/set      → guardar una serie
 │                           #   GET  /api/session/today    → log de la sesión actual
+│                           #   POST /api/session/finish   → progresión post-sesión
 ├── templates/
 │   └── workout.html        # SPA Alpine.js + Tailwind — flujo guiado:
+│                           #   • Soporte de formatos mixtos (ejercicios normales
+│                           #     + bloques de circuito con rondas)
 │                           #   • Ejercicio a ejercicio en el orden de la rutina
-│                           #   • Peso pre-cargado del historial
+│                           #   • Peso pre-cargado desde progression_targets
+│                           #     (o último registro si no hay target)
 │                           #   • Timer pre-configurado por rango de reps
-│                           #   • Progreso visual (barra por ejercicio)
-│                           #   • Pantalla de descanso y resumen final
+│                           #   • Progreso visual (barra segmentada, circuito en ámbar)
+│                           #   • Pantalla de descanso en días sin entrenamiento
+│                           #   • Resumen de sesión + sugerencias de progresión
+│                           #     calculadas por el agente al finalizar
 └── storage/
-    └── user_store.py       # SQLite: users + workouts + routines + session_overrides
+    └── user_store.py       # SQLite: users + workouts + routines +
+                            # session_overrides + progression_targets
 ```
 
 ## Tablas SQLite
@@ -109,6 +139,8 @@ bot/
 | `users` | Perfil completo del usuario (onboarding + objetivo + `web_token`) |
 | `workouts` | Historial de ejercicios (`sets`, `reps`, `weight_kg`, `rir`, `notes`) |
 | `routines` | Rutina activa por usuario (soft replace — guarda historial) |
+| `session_overrides` | Modificaciones temporales a la rutina base |
+| `progression_targets` | Peso sugerido por el agente para la próxima sesión por ejercicio |
 
 ### Columnas clave en `workouts`
 | Columna | Tipo | Descripción |
@@ -132,8 +164,19 @@ Modificaciones temporales a la rutina. No tocan la rutina base.
 |---|---|---|
 | `target_date` | TEXT | `YYYY-MM-DD` del día afectado |
 | `scope` | TEXT | `'day'` = solo ese día, `'week'` = toda esa semana |
-| `modification` | TEXT | Descripción concreta del ajuste |
+| `modification` | TEXT | Descripción del ajuste. Si tiene bullets `• Nombre: SxR`, la web app los parsea y los usa como plan del día en lugar de la rutina base |
 | `reason` | TEXT | Motivo (fútbol, dolor rodilla, etc.) |
+
+### Tabla `progression_targets`
+Peso calculado por el agente al finalizar cada sesión. PRIMARY KEY (user_id, exercise).
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `exercise` | TEXT | Nombre exacto del ejercicio |
+| `next_weight` | REAL | Peso sugerido para la próxima sesión (kg) |
+| `basis` | TEXT | Justificación breve del agente (ej: "RIR 2 estable → +2.5 kg") |
+| `session_date` | TEXT | Fecha de la sesión que generó el cálculo |
+
+`get_last_weight_for_exercise` consulta esta tabla primero; si hay un target, lo usa como `suggested_weight`. Si no, cae al último registro en `workouts`.
 
 ### Lógica de descanso sugerido en la app web
 El timer se pre-configura según el rango de reps del ejercicio:
@@ -144,6 +187,8 @@ El timer se pre-configura según el rango de reps del ejercicio:
 | 8-12 reps | 2 min | Hipertrofia (glucolítico) |
 | 12-20 reps | 90 seg | Resistencia muscular |
 | 20+ reps | 60 seg | Circuito / core |
+
+Para ejercicios de circuito: sin timer entre ejercicios del mismo round; timer de `circuit_rest` solo al final de cada ronda.
 
 ## Cómo correr
 ```bash
@@ -160,9 +205,10 @@ docker compose up --build
 - `TELEGRAM_BOT_TOKEN` — desde @BotFather en Telegram
 - `DEEPSEEK_API_KEY` — desde platform.deepseek.com
 - `WEBHOOK_SECRET` — string secreto compartido con n8n
-- `PORT` — default 8000
+- `PORT` — default 8001 en producción
 - `DATABASE_PATH` — default data/heracles.db
-- `WEB_URL` — URL pública del servidor (ej. `https://tu-dominio.com` con Cloudflare Tunnel)
+- `WEB_URL` — URL pública del servidor (ej. `https://gym.perritoemo.online`)
+- `TIMEZONE` — zona horaria del servidor (ej. `America/Santiago`)
 
 ## Convenciones del proyecto
 - Comentarios educativos en **español** con etiqueta `[CONCEPTO: ...]`
@@ -172,118 +218,117 @@ docker compose up --build
 - Formato de rutinas para Telegram: bullet points `•` + separadores `───`, sin tablas markdown
 
 ## Estado actual
+
+### Completado
 - [x] Estructura base del proyecto
-- [x] Agente LangGraph con tools mínimos (solo escritura)
-- [x] Contexto inyectado en system prompt (perfil + rutina + historial)
+- [x] Agente LangGraph con tools (save_workout, update_goal, update_equipment, log_session_override)
+- [x] Contexto inyectado en system prompt (perfil + rutina + historial + overrides + fecha)
 - [x] Bot Telegram (polling, comandos /start /rutina /historial /webapp /ayuda)
 - [x] FastAPI + webhook para n8n
-- [x] SQLite persistencia (users + workouts + routines)
+- [x] SQLite persistencia (users + workouts + routines + session_overrides + progression_targets)
 - [x] Docker Compose con n8n
+- [x] **Deploy en producción** — Oracle Cloud Free Tier + Cloudflare Tunnel
+  - VM ARM, dominio propio, HTTPS automático
+  - Puerto 8001, túnel en `gym.perritoemo.online`
 - [x] Onboarding completo (ConversationHandler FSM, 9 pasos)
+  - `_NeedsOnboardingFilter`: bloquea el agente hasta que el usuario complete su perfil
+  - Mensaje diferente para usuarios nuevos vs usuarios que abandonaron el flujo
 - [x] Rutinas persistidas via marker pattern (0 LLM calls extra)
 - [x] App web de registro (Alpine.js + Tailwind, dark mode, mobile-first)
+  - **Modo circuito real**: detecta bloques `• Circuito (N rondas, descanso Xs):`
+    con sub-ítems indentados; navega ejercicio a ejercicio sin timer entre ellos,
+    timer de descanso solo al final de cada ronda, badge ámbar "Ronda X/N"
   - Flujo guiado: ejercicio a ejercicio en el orden de la rutina del día
-  - Peso pre-cargado desde el último registro histórico por ejercicio
+  - Peso pre-cargado desde `progression_targets` (o último registro histórico)
   - Timer pre-configurado según rango de reps (fisiología del descanso)
-  - Progreso visual (barra segmentada por ejercicio)
+  - Progreso visual (barra segmentada; circuito en ámbar, normal en índigo)
   - Pantalla de descanso en días sin entrenamiento
-  - Resumen de sesión al finalizar
+  - Resumen de sesión con sugerencias de progresión del agente
   - Autenticación por web_token (no expone Telegram ID en URL)
-  - Compatible con Cloudflare Tunnel (HTTPS, acceso desde el gym)
 - [x] Reglas de negocio de sesión
   - Días de entrenamiento específicos (Lun/Mar/Jue/Vie) en lugar de cantidad
   - Rutina general inmutable + sistema de overrides temporales
+  - Override con ejercicios estructurados reemplaza el plan de la app web
   - Agente detecta alcance del cambio (día / semana / permanente)
   - Tool `log_session_override` para modificaciones sin tocar la rutina base
-  - Agente conoce la fecha de hoy y la sección de rutina que corresponde
-- [ ] Deploy en producción (ver sección Despliegue)
-- [ ] Tests unitarios
-- [ ] Webhook mode (recomendado en producción — reemplaza polling)
-- [ ] SqliteSaver para persistencia de conversaciones entre reinicios
-- [ ] Sugerencias de progresión automáticas
-- [ ] Intent router con LCEL (optimización SaaS futura)
+  - `get_active_overrides` usa TIMEZONE del servidor (no UTC de SQLite)
+- [x] Guardrails del agente
+  - Validación de equipamiento: rechaza ítems inválidos (animales, muebles, etc.)
+  - Alcance restringido: solo responde preguntas de entrenamiento
+  - Español neutro: sin modismos argentinos ni regionales
+  - Formato forzado: sin tablas markdown ni headers (Telegram no los renderiza)
+  - Fecha como referencia absoluta: ignora fechas del historial de conversación
+- [x] **Progresión de carga post-sesión** (1 LLM call directo, sin LangGraph)
+  - Al finalizar la sesión web, `POST /api/session/finish` construye prompt con
+    series de hoy + últimas 5 sesiones por ejercicio
+  - Agente analiza rendimiento (RIR, reps, historial) y devuelve JSON con
+    `next_weight` + justificación por ejercicio
+  - Se persiste en `progression_targets`; la próxima sesión ya lleva el peso progresado
 
-## Despliegue (opciones gratuitas)
+### Pendiente
+- [ ] Recordatorios inteligentes con n8n
+  - Endpoint `POST /webhook/n8n/daily-reminder` que filtra usuarios con entrenamiento hoy
+  - Mensaje personalizado con bloque de sesión + override si aplica
+  - Workflow n8n: Schedule Trigger (8 AM) → HTTP Request al endpoint
+- [ ] Tests unitarios (pytest)
+- [ ] Webhook mode para Telegram (reemplaza polling en producción)
+- [ ] SqliteSaver para persistir conversaciones entre reinicios del contenedor
 
-El bot necesita: proceso siempre activo + SQLite persistente + Python 3.11+.
-Eso descarta plataformas serverless (Cloudflare Workers, AWS Lambda) y las que
-duermen en inactividad (Render free tier).
+## Features futuras (roadmap)
 
-### Opción recomendada: Oracle Cloud Free Tier + Cloudflare Tunnel
+### Alta prioridad — retención y valor percibido
+- **Reporte semanal automático**: cada lunes el agente genera un resumen
+  de la semana anterior (sesiones completadas, progresión de pesos, tendencias).
+  Se envía por Telegram. 0 input del usuario. n8n como disparador.
+- **Detección de récords personales (PRs)**: al guardar un workout, comparar
+  con el histórico del ejercicio. Si es nuevo máximo de peso, reps o volumen
+  → el bot lo celebra automáticamente.
+- **Racha de adherencia**: contador de semanas consecutivas entrenadas.
+  Alerta si el usuario rompe la racha; felicitación al superar hitos (4, 8, 12 semanas).
 
-**Por qué es la mejor opción:**
-- VM Linux real siempre activa, para siempre, sin tarjeta de crédito con cargo
-- SQLite funciona perfectamente (disco persistente)
-- Ya tenés Cloudflare Tunnel + dominio → HTTPS gratis sin configurar Nginx
+### Media prioridad — inteligencia de entrenamiento
+- **Alerta de estancamiento**: si un ejercicio lleva 3+ sesiones sin progresión
+  (mismo peso, mismo RIR) → el agente avisa y sugiere ajuste (variante, técnica, deload).
+- **Control de volumen por grupo muscular**: tracking de series semanales por músculo.
+  Aviso si hay desequilibrio o sobrecarga.
+- **Sugerencia de semana de descarga (deload)**: después de 4-6 semanas de carga
+  progresiva, proponer reducción de volumen/intensidad para recuperación.
+
+### Baja prioridad — escalabilidad SaaS
+- **Intent router con LCEL**: clasificar mensajes antes del agente para rutear
+  directamente a handlers específicos sin pasar por el LLM completo.
+- **Panel de administración**: gestión de usuarios, aprobaciones, estadísticas globales.
+- **SqliteSaver → PostgreSQL**: para soporte multi-worker y persistencia entre deploys.
+
+## Despliegue actual
+
+**Oracle Cloud Free Tier + Cloudflare Tunnel**
 
 ```
-Oracle VM (Ubuntu) ──► Python + Docker Compose ──► Cloudflare Tunnel ──► tu dominio
+Oracle VM ARM (Ubuntu) ──► Docker Compose ──► Cloudflare Tunnel ──► gym.perritoemo.online
+                              bot:8001
+                              n8n:5678
 ```
 
-**Pasos:**
-1. Crear cuenta en cloud.oracle.com → Free Tier → crear VM AMD o ARM
-2. `ssh` a la VM, instalar Docker + Docker Compose
-3. Clonar el repo, copiar `.env`, correr `docker compose up -d`
-4. Instalar `cloudflared` en la VM, conectar el túnel a `localhost:8000`
-5. Apuntar el dominio en Cloudflare Dashboard
+- Bot en `127.0.0.1:8001` (no expuesto directo a internet)
+- Cloudflare Tunnel enruta `gym.perritoemo.online → localhost:8001`
+- SSH alias: `heraclesapi`
+- Deploy: `ssh heraclesapi "cd ~/botHeracles && git pull && docker compose up -d --build bot"`
 
-**Specs gratuitas:** 2 VMs AMD (1 OCPU, 1 GB RAM cada una) o 1 ARM (4 OCPU, 24 GB RAM).
-El bot cabe holgado en la VM más pequeña.
+### Otras opciones documentadas
 
----
-
-### Opción más fácil: Fly.io
-
-**Por qué:**
-- Deploy en 3 comandos, sin configurar servidores
-- Volúmenes persistentes para SQLite (3 GB gratis)
-- HTTPS automático con dominio `.fly.dev`
-
+**Fly.io** (más fácil, requiere tarjeta):
 ```bash
-# Una sola vez
-brew install flyctl      # o curl -L https://fly.io/install.sh | sh
-flyctl auth login
-flyctl launch            # detecta Python, crea fly.toml
-
-# Cada deploy
-flyctl deploy
+flyctl launch && flyctl volumes create heracles_data --size 1 && flyctl deploy
 ```
 
-**Requiere:** tarjeta de crédito para verificar (no cobra dentro del free tier).
-**Límite free:** 3 VMs shared (256 MB RAM), 3 GB almacenamiento.
+**Railway** (prototype only — SQLite no persiste en free tier)
 
-**Nota importante para SQLite en Fly.io:** crear un volumen persistente:
-```bash
-flyctl volumes create heracles_data --size 1   # 1 GB
-```
-Y montar en `fly.toml`:
-```toml
-[mounts]
-  source = "heracles_data"
-  destination = "/app/data"
-```
+### Cambio futuro: webhook mode
 
----
-
-### Opción más rápida (prototype): Railway
-
-- Deploy desde GitHub en 2 clics, sin CLI
-- $5 USD de crédito gratis al mes (~500 horas de uso)
-- **Limitación:** SQLite no tiene volumen persistente en el free tier
-  → los datos se pierden al hacer deploy (sirve solo para demos)
-
----
-
-### Cambio necesario para producción: webhook mode
-
-En local usamos **polling** (el bot pregunta a Telegram cada N segundos).
-En producción conviene **webhook** (Telegram empuja los mensajes a tu URL):
-
+En producción conviene reemplazar polling por webhook:
 ```python
-# En main.py → run_telegram_bot(), reemplazar:
-await telegram_app.updater.start_polling()
-
-# Por:
+# En main.py → run_telegram_bot():
 await telegram_app.updater.start_webhook(
     listen="0.0.0.0",
     port=8443,
@@ -292,14 +337,11 @@ await telegram_app.updater.start_webhook(
 )
 ```
 
-Ventajas: más eficiente, tiempo real, no consume CPU en idle.
-Con Cloudflare Tunnel ya tenés HTTPS → el webhook funciona sin más configuración.
-
 ## n8n
-- UI en http://localhost:5678 (con Docker)
-- Ver instrucciones de configuración en `n8n/README.md`
-- Endpoint que escucha: `POST /webhook/n8n/reminder`
+- UI en `http://localhost:5679` (con Docker en producción)
+- Endpoint actual: `POST /webhook/n8n/reminder` (body: `{message, user_ids}`)
 - Header requerido: `X-Webhook-Secret`
+- Ver instrucciones en `n8n/README.md`
 
 ## Perfil del desarrollador
 - Nivel Python: básico
