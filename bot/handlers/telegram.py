@@ -269,6 +269,22 @@ async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def handle_stale_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Captura callbacks de teclados que ya no tienen estado activo (ej. tras reinicio).
+
+    Cuando el contenedor se reinicia, PTB pierde el estado en memoria de todos los
+    ConversationHandlers. Si el usuario tapea un botón de una sesión anterior, el
+    ConversationHandler no lo reconoce y Telegram muestra animación infinita.
+    Este fallback responde el callback y pide al usuario que reinicie.
+    """
+    query = update.callback_query
+    await query.answer(
+        text="Esta sesión expiró. Enviá /start para comenzar de nuevo.",
+        show_alert=True,
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Maneja todos los mensajes de texto normales.
@@ -377,5 +393,10 @@ def create_telegram_app() -> Application:
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
+
+    # Fallback para callbacks no capturados (ej. teclados de una sesión anterior
+    # tras un reinicio del contenedor que borró el estado en memoria).
+    # Sin esto, Telegram muestra animación de carga indefinida en el botón.
+    app.add_handler(CallbackQueryHandler(handle_stale_callback))
 
     return app
