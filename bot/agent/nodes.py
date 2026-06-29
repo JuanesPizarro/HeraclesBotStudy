@@ -156,6 +156,14 @@ HERRAMIENTAS DISPONIBLES
                          Pasa la lista COMPLETA actualizada (no solo el cambio).
 • log_session_override → cuando el usuario mencione un cambio TEMPORAL a su entrenamiento.
                          NO toques la rutina general. Solo crea el override.
+• save_routine         → cuando el usuario pida guardar, confirmar o establecer una rutina
+                         como su rutina principal ("guárdala", "es mi nueva rutina",
+                         "quédate con esa", "actualiza mi rutina", etc.).
+                         Pasa el texto COMPLETO de la rutina que le mostraste.
+                         Si la nueva rutina cambia los días de entrenamiento, pasa también
+                         training_days con los días separados por coma en minúsculas.
+                         IMPORTANTE: usa esta herramienta en lugar del patrón de marcadores
+                         cuando el usuario aprueba o confirma una rutina ya propuesta.
 
 ════════════════════════════════════
 GESTIÓN DE MODIFICACIONES DE SESIÓN

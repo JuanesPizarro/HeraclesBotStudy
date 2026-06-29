@@ -45,6 +45,7 @@ Canal Telegram
             • update_goal         → usuario cambió su objetivo
             • update_equipment    → usuario actualizó su equipamiento
             • log_session_override → modificación temporal de sesión
+            • save_routine        → usuario aprueba/confirma una rutina propuesta
                 │
                 ├── sin tool calls → END              (1 LLM call)
                 └── con tool calls → tools → agent   (2 LLM calls)
@@ -91,7 +92,7 @@ bot/
 ├── agent/
 │   ├── state.py            # AgentState TypedDict (messages + user_id)
 │   ├── tools.py            # save_workout, update_goal, update_equipment,
-│   │                       # log_session_override
+│   │                       # log_session_override, save_routine
 │   ├── nodes.py            # agent_node — contexto completo inyectado:
 │   │                       #   fecha actual (REFERENCIA ABSOLUTA), sesión del día,
 │   │                       #   overrides activos, perfil, rutina, historial

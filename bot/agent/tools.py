@@ -95,6 +95,38 @@ def update_equipment(user_id: str, equipment_detail: str) -> str:
 
 
 @tool
+def save_routine(
+    user_id: str,
+    routine_text: str,
+    training_days: str | None = None,
+) -> str:
+    """
+    Guarda o reemplaza la rutina principal del usuario en la base de datos.
+    Úsala cuando el usuario pida guardar, confirmar o establecer una rutina
+    como su rutina principal (frases como "guárdala", "es mi nueva rutina",
+    "quédate con esa", "actualiza mi rutina", etc.).
+
+    IMPORTANTE: routine_text debe ser el texto COMPLETO de la rutina con todos
+    los días, ejercicios y detalles. Copia exactamente la rutina que le mostraste
+    al usuario — no la resumas ni la acortes.
+
+    Args:
+        user_id: ID de Telegram del usuario (disponible en el sistema)
+        routine_text: Texto completo de la rutina con todos los días y ejercicios
+        training_days: Días de entrenamiento separados por coma en español y minúsculas
+                       (ej: "lunes,martes,jueves,viernes,sábado"). Solo proporciona
+                       este argumento si la nueva rutina cambia los días de entrenamiento.
+    """
+    _store.save_routine(user_id, routine_text)
+    if training_days:
+        _store.update_training_days(user_id, training_days)
+        days_msg = f"\nDías de entrenamiento actualizados: {training_days}"
+    else:
+        days_msg = ""
+    return f"Rutina guardada correctamente como rutina principal.{days_msg}"
+
+
+@tool
 def log_session_override(
     user_id: str,
     target_date: str,
@@ -139,4 +171,4 @@ def log_session_override(
 # [CONCEPTO: Lista de tools mínima]
 # 3 tools — todos de escritura. Las lecturas (perfil, rutina, historial,
 # overrides activos) se inyectan en el system prompt sin costo extra.
-TOOLS = [save_workout, update_goal, update_equipment, log_session_override]
+TOOLS = [save_workout, update_goal, update_equipment, log_session_override, save_routine]
