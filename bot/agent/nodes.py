@@ -122,6 +122,14 @@ RUTINA GENERAL (base inmutable)
 ════════════════════════════════════
 {routine}
 
+Las líneas "→ progresión calculada: Xkg" o "→ peso sugerido: Xkg" son datos
+en vivo (calculados al terminar la última sesión web, o el último peso
+registrado si aún no hay cálculo) — son la fuente más actualizada de carga
+y reps, más confiable que el texto original de la rutina. Úsalas para
+responder sobre peso/reps actuales, pero NO las copies si vuelves a escribir
+o guardar la rutina con save_routine: esa anotación no es parte del texto
+persistido, solo contexto de lectura.
+
 ════════════════════════════════════
 MODIFICACIONES ACTIVAS (temporales)
 ════════════════════════════════════
@@ -288,27 +296,72 @@ def _extract_day_section(routine_text: str, day_name: str) -> str | None:
 
     [CONCEPTO: Parsing de texto estructurado]
     La rutina tiene encabezados con el nombre del día (ej: "DÍA 1 — EMPUJE (Lunes)").
-    Leemos línea a línea: cuando encontramos el día buscado activamos la captura,
-    y cuando llegamos al siguiente encabezado de día la detenemos.
+    Leemos línea a línea: activamos la captura SOLO cuando la línea es un
+    encabezado "DÍA N" que menciona el día buscado, y la detenemos al llegar
+    al encabezado de otro día. Si solo buscáramos el nombre del día en
+    cualquier línea (sin exigir que sea un encabezado), una nota como
+    "puedes moverlo al {day}" dentro de OTRO día cortaría o reiniciaría
+    la sección equivocada — la causa real de que el agente respondiera
+    con el bloque de un día distinto al que preguntaba el usuario.
     """
     lines = routine_text.split("\n")
     in_section = False
     section_lines: list[str] = []
     header_pattern = re.compile(r"DÍA\s+\d+", re.IGNORECASE)
+    day_pattern = re.compile(rf"\b{re.escape(day_name)}\b", re.IGNORECASE)
 
     for line in lines:
-        if re.search(rf"\b{re.escape(day_name)}\b", line, re.IGNORECASE):
-            in_section = True
-            section_lines = [line]
-        elif in_section:
-            # Si es el encabezado de OTRO día, paramos
-            if header_pattern.search(line) and not re.search(
-                rf"\b{re.escape(day_name)}\b", line, re.IGNORECASE
-            ):
+        if header_pattern.search(line):
+            if day_pattern.search(line):
+                in_section = True
+                section_lines = [line]
+            elif in_section:
                 break
+        elif in_section:
             section_lines.append(line)
 
     return "\n".join(section_lines).strip() if section_lines else None
+
+
+_EXERCISE_LINE_RE = re.compile(r"^([•\-\*]\s+)([^:]+?)(:.*)$")
+
+
+def _annotate_routine_with_weights(routine_text: str, user_id: str) -> str:
+    """
+    Anota cada línea de ejercicio con la progresión calculada más reciente.
+
+    El texto de routine_text es una FOTO tomada cuando se guardó la rutina
+    (con save_routine o el patrón de marcadores). Cada sesión web termina
+    recalculando next_weight/next_reps en progression_targets, pero eso nunca
+    reescribe la rutina guardada — por eso el mismo ejercicio podía verse con
+    pesos o rangos de reps distintos entre lo que decía la rutina general y lo
+    que la app web ya estaba sugiriendo. Anotamos aquí en tiempo real (misma
+    fuente que usa la web, get_progression_target / get_last_weight_for_exercise)
+    para que el bloque "RUTINA GENERAL" del prompt siempre hable con la
+    progresión vigente sin depender de que el LLM reescriba el texto guardado.
+    """
+    annotated_lines = []
+    for line in routine_text.split("\n"):
+        stripped = line.strip()
+        match = _EXERCISE_LINE_RE.match(stripped)
+        if match:
+            name = match.group(2).strip()
+            if 2 < len(name) < 50 and not name.lower().startswith("circuito"):
+                indent = line[: len(line) - len(line.lstrip())]
+                target = _store.get_progression_target(user_id, name)
+                if target is not None:
+                    reps_part = f", {target['next_reps']} reps" if target.get("next_reps") else ""
+                    annotated_lines.append(
+                        f"{indent}{stripped}  → progresión calculada: {target['next_weight']} kg{reps_part}"
+                        + (f" ({target['basis']})" if target.get("basis") else "")
+                    )
+                    continue
+                weight = _store.get_last_weight_for_exercise(user_id, name)
+                if weight is not None:
+                    annotated_lines.append(f"{indent}{stripped}  → peso sugerido: {weight} kg")
+                    continue
+        annotated_lines.append(line)
+    return "\n".join(annotated_lines)
 
 
 def _next_training_day(today_day: str, training_days: list[str]) -> str | None:
@@ -413,7 +466,8 @@ def _build_context(user_id: str) -> dict:
     # ── Rutina general ───────────────────────────────────────────────────
     if routine:
         date = routine["created_at"][:10]
-        routine_text = f"Guardada el {date}:\n\n{routine['routine_text']}"
+        annotated_routine = _annotate_routine_with_weights(routine["routine_text"], user_id)
+        routine_text = f"Guardada el {date}:\n\n{annotated_routine}"
     else:
         routine_text = "Sin rutina guardada. Cuando el usuario lo pida, genera una."
 
@@ -445,10 +499,19 @@ def _build_context(user_id: str) -> dict:
         today_done_text = "No hay series registradas hoy todavía."
 
     # ── Historial reciente (sesiones anteriores) ─────────────────────────
+    # [CONCEPTO: Convertir timestamps UTC a fecha local]
+    # logged_at se guarda en UTC. Al mostrar fechas al agente, las convertimos
+    # a la timezone del negocio para que no haya discrepancias con "HOY".
     if workouts:
         lines = []
         for w in workouts:
-            date = w["logged_at"][:10]
+            try:
+                logged_utc = datetime.datetime.strptime(w["logged_at"], "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=datetime.timezone.utc
+                )
+                date = logged_utc.astimezone(tz).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                date = w["logged_at"][:10]
             rir_str = f" RIR {w['rir']}" if w.get("rir") is not None else ""
             lines.append(
                 f"• {w['exercise']}: {w['sets']}x{w['reps']} @ {w['weight_kg']}kg{rir_str}  [{date}]"

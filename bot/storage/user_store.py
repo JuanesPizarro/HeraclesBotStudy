@@ -460,18 +460,37 @@ class UserStore:
         """
         Devuelve todas las series registradas hoy por el usuario, en orden cronológico.
 
-        [CONCEPTO: DATE() en SQLite]
-        DATE('now') devuelve la fecha actual en UTC como 'YYYY-MM-DD'.
-        DATE(logged_at) extrae solo la parte de fecha del timestamp.
-        Comparar ambas filtra registros del día de hoy sin importar la hora.
+        [CONCEPTO: Timezone en SQLite vs Python]
+        SQLite guarda timestamps en UTC con datetime('now'). Para filtrar por
+        "hoy" en la timezone del negocio (ej: America/Santiago), calculamos
+        en Python el inicio y fin del día local como strings UTC y los usamos
+        como rango en la query. Así el filtro es correcto aunque el servidor
+        corra en UTC y el usuario esté en otro huso horario.
         """
+        import datetime as _dt
+        import zoneinfo as _zi
+
+        tz = _zi.ZoneInfo(settings.TIMEZONE)
+        now_local = _dt.datetime.now(tz)
+        today_local = now_local.date()
+
+        # Inicio y fin del día en timezone local, convertidos a UTC para comparar
+        start_utc = _dt.datetime(today_local.year, today_local.month, today_local.day,
+                                 tzinfo=tz).astimezone(_dt.timezone.utc)
+        end_utc = start_utc + _dt.timedelta(days=1)
+
+        start_str = start_utc.strftime("%Y-%m-%d %H:%M:%S")
+        end_str = end_utc.strftime("%Y-%m-%d %H:%M:%S")
+
         with self._get_conn() as conn:
             rows = conn.execute(
                 """SELECT id, exercise, sets, reps, weight_kg, rir, notes, logged_at
                    FROM workouts
-                   WHERE user_id = ? AND DATE(logged_at, 'localtime') = DATE('now', 'localtime')
+                   WHERE user_id = ?
+                     AND logged_at >= ?
+                     AND logged_at < ?
                    ORDER BY logged_at ASC""",
-                (user_id,),
+                (user_id, start_str, end_str),
             ).fetchall()
             return [dict(row) for row in rows]
 

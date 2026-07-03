@@ -201,21 +201,27 @@ def _parse_session_exercises(section_text: str) -> list[dict]:
 
 
 def _extract_day_section(routine_text: str, day_name: str) -> str | None:
-    """Extrae la sección de la rutina correspondiente a un día específico."""
+    """
+    Extrae la sección de la rutina correspondiente a un día específico.
+
+    Solo activa/corta la captura en líneas que son encabezados "DÍA N"
+    (no en cualquier línea que mencione el día) para evitar que una nota
+    del tipo "puedes moverlo al {day}" dentro de otro día contamine la sección.
+    """
     lines = routine_text.split("\n")
     in_section = False
     section_lines: list[str] = []
     header_pattern = re.compile(r"DÍA\s+\d+", re.IGNORECASE)
+    day_pattern = re.compile(rf"\b{re.escape(day_name)}\b", re.IGNORECASE)
 
     for line in lines:
-        if re.search(rf"\b{re.escape(day_name)}\b", line, re.IGNORECASE):
-            in_section = True
-            section_lines = [line]
-        elif in_section:
-            if header_pattern.search(line) and not re.search(
-                rf"\b{re.escape(day_name)}\b", line, re.IGNORECASE
-            ):
+        if header_pattern.search(line):
+            if day_pattern.search(line):
+                in_section = True
+                section_lines = [line]
+            elif in_section:
                 break
+        elif in_section:
             section_lines.append(line)
 
     return "\n".join(section_lines).strip() if section_lines else None
