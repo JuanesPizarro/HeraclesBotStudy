@@ -483,10 +483,38 @@
           return true;
         },
 
+        // Normaliza un nombre de ejercicio para comparar (sin acentos, minúsculas).
+        _normalizeName(name) {
+          return (name || '')
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .trim();
+        },
+
+        // Compara dos nombres de ejercicio de forma tolerante a variaciones menores
+        // (ej: la rutina se regeneró a mitad del día y "Fondos en paralelas" pasó a
+        // llamarse "Fondos en paralelas con banda"). Sin esto, una serie ya guardada
+        // hoy deja de "contar" para el plan actualizado y la app vuelve a pedir el
+        // ejercicio como si no se hubiera completado la sesión.
+        _namesMatch(a, b) {
+          const na = this._normalizeName(a);
+          const nb = this._normalizeName(b);
+          if (!na || !nb) return false;
+          if (na === nb) return true;
+          const [shorter, longer] = na.length <= nb.length ? [na, nb] : [nb, na];
+          if (!longer.startsWith(shorter)) return false;
+          const nextChar = longer[shorter.length];
+          return nextChar === ' ' || nextChar === '(';
+        },
+
+        _setsFor(exerciseName) {
+          return this.session.filter(s => this._namesMatch(s.exercise, exerciseName));
+        },
+
         get setsForCurrentEx() {
           const name = this.currentExercise?.name;
           if (!name) return [];
-          return this.session.filter(s => s.exercise === name);
+          return this._setsFor(name);
         },
 
         get setsCompleted() {
@@ -499,7 +527,7 @@
           if (ex.is_circuit) {
             // En circuito: objetivo = 1 set en esta ronda (baseline marca el inicio)
             const baseline = this.circuitCompletedSets[ex.name] ?? 0;
-            return this.session.filter(s => s.exercise === ex.name).length - baseline >= 1;
+            return this._setsFor(ex.name).length - baseline >= 1;
           }
           return this.setsCompleted >= (ex.target_sets ?? 99);
         },
@@ -586,7 +614,7 @@
           if (circuitExs.length > 0) {
             const circuitRounds = circuitExs[0].circuit_rounds;
             const minLogged = Math.min(
-              ...circuitExs.map(e => this.session.filter(s => s.exercise === e.name).length)
+              ...circuitExs.map(e => this._setsFor(e.name).length)
             );
             if (minLogged < circuitRounds) {
               // Circuito incompleto: encontrar punto de reanudación
@@ -597,7 +625,7 @@
               this.circuitCompletedSets = baseline;
 
               for (let i = 0; i < circuitExs.length; i++) {
-                const logged = this.session.filter(s => s.exercise === circuitExs[i].name).length;
+                const logged = this._setsFor(circuitExs[i].name).length;
                 if (logged <= minLogged) {
                   this._loadExercise(firstCircuitIdx + i);
                   return;
@@ -612,7 +640,7 @@
           for (let i = 0; i < exercises.length; i++) {
             const ex = exercises[i];
             if (ex.is_circuit) continue;  // el circuito se maneja arriba
-            const logged = this.session.filter(s => s.exercise === ex.name).length;
+            const logged = this._setsFor(ex.name).length;
             if (logged < ex.target_sets) {
               this._loadExercise(i);
               return;
@@ -635,7 +663,7 @@
           if (ex.is_circuit && ex.circuit_position === 0) {
             const circuitExs = this.plan.exercises.filter(e => e.is_circuit);
             const minLogged = Math.min(
-              ...circuitExs.map(e => this.session.filter(s => s.exercise === e.name).length)
+              ...circuitExs.map(e => this._setsFor(e.name).length)
             );
             this.circuitRound = minLogged + 1;
             const baseline = {};
@@ -706,7 +734,7 @@
 
             if (ex.is_circuit) {
               const baseline = this.circuitCompletedSets[exercise] ?? 0;
-              const totalLogged = this.session.filter(s => s.exercise === exercise).length;
+              const totalLogged = this._setsFor(exercise).length;
               const isRoundDone = (totalLogged - baseline) >= 1;
 
               if (!isRoundDone) {
@@ -739,7 +767,7 @@
               }
             } else {
               // Ejercicio normal: lógica existente
-              const newCount = this.session.filter(s => s.exercise === exercise).length;
+              const newCount = this._setsFor(exercise).length;
               const target   = ex.target_sets ?? 99;
               if (newCount >= target && this.isLastExercise) {
                 setTimeout(() => this.finishSession(), 1500);
