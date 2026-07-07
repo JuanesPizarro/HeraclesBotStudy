@@ -174,10 +174,20 @@ Peso calculado por el agente al finalizar cada sesión. PRIMARY KEY (user_id, ex
 |---|---|---|
 | `exercise` | TEXT | Nombre exacto del ejercicio |
 | `next_weight` | REAL | Peso sugerido para la próxima sesión (kg) |
+| `next_reps` | TEXT | Rango de reps sugerido (ej: "8-10") |
+| `next_sets` | INTEGER | Series sugeridas (doble progresión: reps/series antes que peso) |
 | `basis` | TEXT | Justificación breve del agente (ej: "RPE 8 estable → +2.5 kg") |
 | `session_date` | TEXT | Fecha de la sesión que generó el cálculo |
 
 `get_last_weight_for_exercise` consulta esta tabla primero; si hay un target, lo usa como `suggested_weight`. Si no, cae al último registro en `workouts`.
+
+### Estrategia de progresión (doble progresión)
+Al finalizar la sesión, el agente NO sube peso como primera palanca. Orden estricto:
+1. Reps dentro del rango objetivo (si no tocó el techo con RPE 6-8).
+2. Series +1 (si ya tocó el techo de reps con margen, antes de subir peso).
+3. Peso (solo cuando reps y series ya están al tope) — vuelve next_reps al piso del rango.
+Si el RPE fue alto (9-10) sin completar el rango, se mantiene todo igual (consolidar antes de progresar).
+Ver `_build_progression_prompt` en `bot/handlers/web_api.py` y `apply_progression_to_routine_text` en `bot/agent/nodes.py` (reescribe series/reps/peso en la rutina general persistida).
 
 ### Lógica de descanso sugerido en la app web
 El timer se pre-configura según el rango de reps del ejercicio:

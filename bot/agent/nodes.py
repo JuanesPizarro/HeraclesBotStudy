@@ -351,8 +351,9 @@ def _annotate_routine_with_weights(routine_text: str, user_id: str) -> str:
                 target = _store.get_progression_target(user_id, name)
                 if target is not None:
                     reps_part = f", {target['next_reps']} reps" if target.get("next_reps") else ""
+                    sets_part = f", {target['next_sets']} series" if target.get("next_sets") else ""
                     annotated_lines.append(
-                        f"{indent}{stripped}  → progresión calculada: {target['next_weight']} kg{reps_part}"
+                        f"{indent}{stripped}  → progresión calculada: {target['next_weight']} kg{reps_part}{sets_part}"
                         + (f" ({target['basis']})" if target.get("basis") else "")
                     )
                     continue
@@ -362,6 +363,51 @@ def _annotate_routine_with_weights(routine_text: str, user_id: str) -> str:
                     continue
         annotated_lines.append(line)
     return "\n".join(annotated_lines)
+
+
+_SETSREPS_RE = re.compile(r"(\d+)x([\d\-]+)")
+_WEIGHT_RE = re.compile(r"@\s*[\d.]+(?:-[\d.]+)?\s*kg", re.IGNORECASE)
+
+
+def _format_weight(weight: float) -> str:
+    return str(int(weight)) if weight == int(weight) else str(weight)
+
+
+def apply_progression_to_routine_text(routine_text: str, user_id: str) -> str:
+    """
+    Reescribe series, reps y peso de cada línea de ejercicio con la progresión
+    que el agente acaba de calcular al terminar la sesión.
+
+    A diferencia de _annotate_routine_with_weights (que solo anota al vuelo
+    para el contexto del chat), esto persiste el ajuste en el texto guardado
+    de la rutina general — así /rutina y la app web muestran las mismas
+    series/reps/peso sin depender de que el usuario pregunte por chat.
+    """
+    updated_lines = []
+    for line in routine_text.split("\n"):
+        stripped = line.strip()
+        match = _EXERCISE_LINE_RE.match(stripped)
+        if match:
+            bullet, name, tail = match.group(1), match.group(2).strip(), match.group(3)
+            if 2 < len(name) < 50 and not name.lower().startswith("circuito"):
+                target = _store.get_progression_target(user_id, name)
+                if target is not None:
+                    next_sets = target.get("next_sets")
+                    next_reps = target.get("next_reps")
+                    if next_sets or next_reps:
+                        def _replace_setsreps(m: re.Match) -> str:
+                            sets = str(next_sets) if next_sets else m.group(1)
+                            reps = next_reps if next_reps else m.group(2)
+                            return f"{sets}x{reps}"
+                        tail = _SETSREPS_RE.sub(_replace_setsreps, tail, count=1)
+                    next_weight = target.get("next_weight")
+                    if next_weight and _WEIGHT_RE.search(tail):
+                        tail = _WEIGHT_RE.sub(f"@ {_format_weight(next_weight)} kg", tail, count=1)
+                    indent = line[: len(line) - len(line.lstrip())]
+                    updated_lines.append(f"{indent}{bullet}{name}{tail}")
+                    continue
+        updated_lines.append(line)
+    return "\n".join(updated_lines)
 
 
 def _next_training_day(today_day: str, training_days: list[str]) -> str | None:

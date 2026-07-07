@@ -177,7 +177,8 @@ class UserStore:
             ("notes", "TEXT"),      # Sensaciones / observaciones de la serie
         ]
         new_progression_columns = [
-            ("next_reps", "TEXT"),  # Reps sugeridas por el agente (ej: "8-10", "3x10")
+            ("next_reps", "TEXT"),     # Reps sugeridas por el agente (ej: "8-10", "3x10")
+            ("next_sets", "INTEGER"),  # Series sugeridas (doble progresión: reps/series antes que peso)
         ]
         with self._get_conn() as conn:
             existing_users = {
@@ -420,24 +421,25 @@ class UserStore:
         basis: str,
         session_date: str,
         next_reps: str | None = None,
+        next_sets: int | None = None,
     ) -> None:
         """
-        Persiste el peso y las reps sugeridas para la próxima sesión de un ejercicio.
+        Persiste peso, reps y series sugeridas para la próxima sesión de un ejercicio.
         INSERT OR REPLACE sobreescribe el registro anterior del mismo ejercicio.
         """
         with self._get_conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO progression_targets
-                   (user_id, exercise, next_weight, next_reps, basis, session_date, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
-                (user_id, exercise, next_weight, next_reps, basis, session_date),
+                   (user_id, exercise, next_weight, next_reps, next_sets, basis, session_date, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                (user_id, exercise, next_weight, next_reps, next_sets, basis, session_date),
             )
 
     def get_progression_target(self, user_id: str, exercise: str) -> dict | None:
         """Devuelve el objetivo de progresión guardado para un ejercicio, si existe."""
         with self._get_conn() as conn:
             row = conn.execute(
-                """SELECT next_weight, next_reps, basis, session_date
+                """SELECT next_weight, next_reps, next_sets, basis, session_date
                    FROM progression_targets
                    WHERE user_id = ? AND LOWER(exercise) = LOWER(?)""",
                 (user_id, exercise),
@@ -677,3 +679,19 @@ class UserStore:
                 (user_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    def update_active_routine_text(self, user_id: str, routine_text: str) -> None:
+        """
+        Sobreescribe el texto de la rutina activa sin crear una versión nueva.
+
+        [CONCEPTO: Ajuste in-place vs versión nueva]
+        save_routine() crea un historial porque representa un cambio de
+        diseño (el usuario aprueba una rutina distinta). Esto es distinto:
+        solo actualiza pesos/reps con la progresión calculada al terminar
+        una sesión, así que no amerita una fila nueva en `routines`.
+        """
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE routines SET routine_text = ? WHERE user_id = ? AND is_active = 1",
+                (routine_text, user_id),
+            )

@@ -22,6 +22,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from bot.storage.user_store import UserStore
+from bot.agent.nodes import apply_progression_to_routine_text
 from bot.config import settings
 
 # =====================================================================
@@ -529,17 +530,39 @@ SESIÓN COMPLETADA HOY:
 HISTORIAL RECIENTE (últimas sesiones registradas por ejercicio):
 {chr(10).join(lines_hist) or 'Sin historial previo'}
 
+ESTRATEGIA DE PROGRESIÓN — DOBLE PROGRESIÓN (orden estricto):
+El peso NO es la primera palanca. Antes de subir peso, agota el margen de
+reps y series dentro del rango objetivo:
+1. Si no completó el TECHO del rango de reps en todas las series con RPE
+   moderado (6-8) → mantén el mismo peso, sube next_reps buscando el techo.
+2. Si ya completó el techo del rango en todas las series con RPE 6-8
+   (hay margen, no llegó al fallo) y el ejercicio admite más volumen antes
+   de subir carga → sube next_sets en +1 (ej: 3→4) manteniendo el mismo
+   peso y el rango de reps.
+3. Solo cuando YA completó el techo del rango en todas las series CON
+   series completas (sin margen de reps ni series por agregar) →
+   ahí recién sube next_weight y vuelve next_reps al piso del rango.
+4. Si el RPE fue alto (9-10) y no completó el rango o falló series
+   → mantén mismo peso, mismas reps, mismas series (consolidar antes de
+   progresar). No subas peso en esta situación.
+Ejercicios de peso corporal (weight_kg=0) siguen la misma lógica pero
+usando solo reps/series como palanca — next_weight se mantiene en 0 salvo
+que el usuario ya esté agregando peso externo (chaleco, disco, banda).
+
 Basándote en tu criterio como entrenador experto, el perfil del usuario,
 el rendimiento de hoy (series, repeticiones y RPE) y la tendencia del historial,
-calcula el peso que debería usar en la PRÓXIMA sesión para cada ejercicio.
+aplica la estrategia de doble progresión para cada ejercicio.
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown:
 [
-  {{"exercise": "nombre exacto del ejercicio", "next_weight": 32.5, "next_reps": "8-10", "basis": "justificación breve en ≤10 palabras"}},
+  {{"exercise": "nombre exacto del ejercicio", "next_weight": 32.5, "next_reps": "8-10", "next_sets": 3, "basis": "justificación breve en ≤10 palabras"}},
   ...
 ]
-next_reps es el rango de reps recomendado para la próxima sesión (ej: "8-10", "10-12", "3x8").
-Si el rango actual es correcto, repite el mismo valor."""
+next_reps es el rango de reps recomendado para la próxima sesión (ej: "8-10", "10-12").
+next_sets es el número de series recomendado (ej: 3, 4). Si el rango de reps o el
+número de series actual ya es correcto, repite el mismo valor — no cambies varias
+palancas (reps, series, peso) al mismo tiempo, solo la que corresponda según la
+estrategia de arriba."""
 
 
 @router.post("/api/session/finish")
@@ -598,6 +621,7 @@ async def finish_session(user: dict = Depends(get_current_user)) -> dict:
         ex = item.get("exercise", "").strip()
         nw = item.get("next_weight")
         if ex and nw is not None:
+            next_sets = item.get("next_sets")
             _store.save_progression_target(
                 user_id=uid,
                 exercise=ex,
@@ -605,6 +629,15 @@ async def finish_session(user: dict = Depends(get_current_user)) -> dict:
                 basis=item.get("basis", ""),
                 session_date=today_str,
                 next_reps=item.get("next_reps") or None,
+                next_sets=int(next_sets) if next_sets else None,
             )
+
+    # Reflejar la progresión calculada en la rutina general persistida,
+    # para que /rutina y la app web muestren el mismo peso sin pasar por el chat.
+    routine = _store.get_active_routine(uid)
+    if routine:
+        updated_text = apply_progression_to_routine_text(routine["routine_text"], uid)
+        if updated_text != routine["routine_text"]:
+            _store.update_active_routine_text(uid, updated_text)
 
     return {"suggestions": suggestions}
