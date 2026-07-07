@@ -55,7 +55,7 @@ Canal Web (https://gym.perritoemo.online/app?token=xxx)
         ├── GET  /api/session/plan    → plan del día; si hay override con ejercicios
         │                               estructurados, los aplica sobre la rutina base
         ├── GET  /api/session/me      → perfil del usuario               (0 LLM calls)
-        ├── POST /api/session/set     → guardar serie (peso/reps/RIR)   (0 LLM calls)
+        ├── POST /api/session/set     → guardar serie (peso/reps/RPE)   (0 LLM calls)
         ├── GET  /api/session/today   → log de la sesión actual         (0 LLM calls)
         └── POST /api/session/finish  → agente calcula progresión de carga
                                         y persiste en progression_targets (1 LLM call)
@@ -138,7 +138,7 @@ bot/
 | Tabla | Propósito |
 |---|---|
 | `users` | Perfil completo del usuario (onboarding + objetivo + `web_token`) |
-| `workouts` | Historial de ejercicios (`sets`, `reps`, `weight_kg`, `rir`, `notes`) |
+| `workouts` | Historial de ejercicios (`sets`, `reps`, `weight_kg`, `rpe`, `notes`) |
 | `routines` | Rutina activa por usuario (soft replace — guarda historial) |
 | `session_overrides` | Modificaciones temporales a la rutina base |
 | `progression_targets` | Peso sugerido por el agente para la próxima sesión por ejercicio |
@@ -149,7 +149,7 @@ bot/
 | `sets` | INTEGER | Desde Telegram: series totales (ej. 4). Desde web: siempre 1 |
 | `reps` | INTEGER | Repeticiones por serie |
 | `weight_kg` | REAL | Peso en kg. 0 = peso corporal |
-| `rir` | INTEGER | Repeticiones en Recámara (0=fallo, 5=muy cómodo). Null si viene de Telegram |
+| `rpe` | INTEGER | Esfuerzo Percibido (6=liviano, 10=fallo). Null si viene de Telegram |
 | `notes` | TEXT | Sensaciones de la serie. Null si viene de Telegram |
 
 ### Columnas clave en `users`
@@ -174,7 +174,7 @@ Peso calculado por el agente al finalizar cada sesión. PRIMARY KEY (user_id, ex
 |---|---|---|
 | `exercise` | TEXT | Nombre exacto del ejercicio |
 | `next_weight` | REAL | Peso sugerido para la próxima sesión (kg) |
-| `basis` | TEXT | Justificación breve del agente (ej: "RIR 2 estable → +2.5 kg") |
+| `basis` | TEXT | Justificación breve del agente (ej: "RPE 8 estable → +2.5 kg") |
 | `session_date` | TEXT | Fecha de la sesión que generó el cálculo |
 
 `get_last_weight_for_exercise` consulta esta tabla primero; si hay un target, lo usa como `suggested_weight`. Si no, cae al último registro en `workouts`.
@@ -262,7 +262,7 @@ docker compose up --build
 - [x] **Progresión de carga post-sesión** (1 LLM call directo, sin LangGraph)
   - Al finalizar la sesión web, `POST /api/session/finish` construye prompt con
     series de hoy + últimas 5 sesiones por ejercicio
-  - Agente analiza rendimiento (RIR, reps, historial) y devuelve JSON con
+  - Agente analiza rendimiento (RPE, reps, historial) y devuelve JSON con
     `next_weight` + justificación por ejercicio
   - Se persiste en `progression_targets`; la próxima sesión ya lleva el peso progresado
 
@@ -289,7 +289,7 @@ docker compose up --build
 
 ### Media prioridad — inteligencia de entrenamiento
 - **Alerta de estancamiento**: si un ejercicio lleva 3+ sesiones sin progresión
-  (mismo peso, mismo RIR) → el agente avisa y sugiere ajuste (variante, técnica, deload).
+  (mismo peso, mismo RPE) → el agente avisa y sugiere ajuste (variante, técnica, deload).
 - **Control de volumen por grupo muscular**: tracking de series semanales por músculo.
   Aviso si hay desequilibrio o sobrecarga.
 - **Sugerencia de semana de descarga (deload)**: después de 4-6 semanas de carga

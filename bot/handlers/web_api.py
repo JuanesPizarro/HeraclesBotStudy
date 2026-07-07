@@ -322,7 +322,7 @@ class SetPayload(BaseModel):
     exercise: str
     reps: int
     weight_kg: float = 0.0
-    rir: Optional[int] = None   # Repeticiones en Recámara: 0=fallo, 5=muy cómodo
+    rpe: Optional[int] = None   # Esfuerzo Percibido: 6=liviano, 10=fallo
     notes: Optional[str] = None
 
 
@@ -334,7 +334,7 @@ async def log_set(payload: SetPayload) -> dict:
     Diferencia vs el bot de Telegram:
     - Bot: el LLM infiere "4x8 80kg" → un registro con sets=4
     - App web: el usuario registra serie por serie → un registro con sets=1
-    Mayor granularidad permite tracking de RPE/RIR por serie individual.
+    Mayor granularidad permite tracking de RPE por serie individual.
     """
     # Validar token desde el body (no usamos Depends aquí porque el token va en el body)
     user = _store.get_user_by_token(payload.token)
@@ -348,7 +348,7 @@ async def log_set(payload: SetPayload) -> dict:
         sets=1,
         reps=payload.reps,
         weight_kg=payload.weight_kg,
-        rir=payload.rir,
+        rpe=payload.rpe,
         notes=payload.notes,
     )
 
@@ -360,7 +360,7 @@ async def log_set(payload: SetPayload) -> dict:
         "sets": 1,
         "reps": payload.reps,
         "weight_kg": payload.weight_kg,
-        "rir": payload.rir,
+        "rpe": payload.rpe,
         "notes": payload.notes,
     }
 
@@ -477,7 +477,7 @@ def _build_progression_prompt(
     Construye el contexto para que el agente calcule la progresión de carga.
 
     [CONCEPTO: Agente como experto — sin reglas hardcodeadas]
-    Le pasamos datos crudos (series, RIR, historial) y el perfil del usuario.
+    Le pasamos datos crudos (series, RPE, historial) y el perfil del usuario.
     El agente usa su conocimiento de entrenamiento para decidir la carga,
     pudiendo aplicar periodización, gestión de fatiga u otras consideraciones
     que reglas determinísticas no capturarían.
@@ -490,7 +490,7 @@ def _build_progression_prompt(
     for ex, sets in today_by_ex.items():
         series_str = "  ".join(
             f"S{i+1}: {s['reps']}r @{s['weight_kg']}kg"
-            + (f" RIR{s['rir']}" if s.get("rir") is not None else "")
+            + (f" RPE{s['rpe']}" if s.get("rpe") is not None else "")
             for i, s in enumerate(sets)
         )
         lines_today.append(f"• {ex}: {series_str}")
@@ -501,7 +501,7 @@ def _build_progression_prompt(
             continue
         rec_str = " | ".join(
             f"{r['reps']}r @{r['weight_kg']}kg"
-            + (f" RIR{r['rir']}" if r.get("rir") is not None else "")
+            + (f" RPE{r['rpe']}" if r.get("rpe") is not None else "")
             + f" [{r['session_date']}]"
             for r in records
         )
@@ -515,14 +515,13 @@ PERFIL DEL USUARIO:
 • Nivel: {user.get('experience_level', '?')}
 • Equipamiento: {user.get('home_equipment_detail') or user.get('equipment', '?')}
 
-ESCALA RIR (Repeticiones en Recámara) — IMPORTANTE:
-RIR 0 = fallo total (0 reps restantes, máximo esfuerzo)
-RIR 1 = 1 rep restante, muy cerca del fallo
-RIR 2 = 2 reps restantes, buena intensidad
-RIR 3 = 3 reps restantes
-RIR 4 = 4 reps restantes
-RIR 5 = 5+ reps restantes, muy fácil/liviano
-→ RIR bajo (0-2) = peso desafiante. RIR alto (4-5) = peso demasiado liviano, subir carga.
+ESCALA RPE (Esfuerzo Percibido) — IMPORTANTE:
+RPE 10 = fallo total (0 reps restantes, máximo esfuerzo)
+RPE 9 = 1 rep en recámara, muy cerca del fallo
+RPE 8 = 2 reps en recámara, buena intensidad
+RPE 7 = 3 reps en recámara
+RPE 6 = 4+ reps en recámara, liviano
+→ RPE alto (9-10) = peso desafiante. RPE bajo (6-7) = peso demasiado liviano, subir carga.
 
 SESIÓN COMPLETADA HOY:
 {chr(10).join(lines_today) or 'Sin series registradas'}
@@ -531,7 +530,7 @@ HISTORIAL RECIENTE (últimas sesiones registradas por ejercicio):
 {chr(10).join(lines_hist) or 'Sin historial previo'}
 
 Basándote en tu criterio como entrenador experto, el perfil del usuario,
-el rendimiento de hoy (series, repeticiones y RIR) y la tendencia del historial,
+el rendimiento de hoy (series, repeticiones y RPE) y la tendencia del historial,
 calcula el peso que debería usar en la PRÓXIMA sesión para cada ejercicio.
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown:

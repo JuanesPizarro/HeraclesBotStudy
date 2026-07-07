@@ -88,8 +88,8 @@
                     <span class="text-zinc-600"> × </span>
                     <span x-text="set.reps"></span>
                   </span>
-                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold" :class="rirBadgeColor(set.rir)"
-                        x-text="set.rir !== null ? 'RIR '+set.rir : ''"></span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold" :class="rpeBadgeColor(set.rpe)"
+                        x-text="set.rpe !== null ? 'RPE '+set.rpe : ''"></span>
                 </div>
               </template>
             </div>
@@ -264,23 +264,23 @@
           </div>
         </div>
 
-        <!-- RIR -->
+        <!-- RPE -->
         <div>
           <div class="flex items-center justify-between mb-2">
-            <label class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">RIR — Esfuerzo</label>
-            <span class="text-[11px] text-zinc-500" x-text="rirLabel(rir)"></span>
+            <label class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">RPE — Esfuerzo</label>
+            <span class="text-[11px] text-zinc-500" x-text="rpeLabel(rpe)"></span>
           </div>
           <div class="flex gap-1.5">
-            <template x-for="n in [0,1,2,3,4,5]" :key="n">
-              <button @click="rir = n"
+            <template x-for="n in [6,7,8,9,10]" :key="n">
+              <button @click="rpe = n"
                       class="flex-1 h-10 rounded-xl text-sm font-bold transition-all active:scale-95"
-                      :class="rir === n ? rirActiveColor(n) : 'bg-zinc-800 text-zinc-600 hover:text-zinc-300'"
+                      :class="rpe === n ? rpeActiveColor(n) : 'bg-zinc-800 text-zinc-600 hover:text-zinc-300'"
                       x-text="n"></button>
             </template>
           </div>
           <div class="flex justify-between mt-1">
+            <span class="text-[9px] text-emerald-600 font-medium">Liviano</span>
             <span class="text-[9px] text-rose-600 font-medium">Fallo</span>
-            <span class="text-[9px] text-emerald-600 font-medium">Fácil</span>
           </div>
         </div>
 
@@ -368,8 +368,8 @@
                 <span class="text-zinc-600"> × </span>
                 <span x-text="set.reps"></span>
               </span>
-              <span class="text-[10px] px-1.5 py-0.5 rounded font-semibold" :class="rirBadgeColor(set.rir)"
-                    x-text="set.rir !== null ? 'RIR '+set.rir : ''"></span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded font-semibold" :class="rpeBadgeColor(set.rpe)"
+                    x-text="set.rpe !== null ? 'RPE '+set.rpe : ''"></span>
             </div>
             <template x-if="set.notes">
               <p class="text-[11px] text-zinc-600 italic ml-8 -mt-1" x-text="set.notes"></p>
@@ -412,7 +412,7 @@
         // ── Formulario de serie ─────────────────────
         weight: '',
         reps: '',
-        rir: 2,
+        rpe: 8,
         notes: '',
 
         // ── UI ─────────────────────────────────────
@@ -679,7 +679,7 @@
           } else {
             this.reps = ex.reps_max ? String(ex.reps_max) : '';
           }
-          this.rir    = 2;
+          this.rpe    = 8;
           this.notes  = '';
           this.error  = '';
 
@@ -714,7 +714,7 @@
                 exercise,
                 reps: parseInt(this.reps),
                 weight_kg: parseFloat(this.weight) || 0,
-                rir: this.rir,
+                rpe: this.rpe,
                 notes: this.notes.trim() || null,
               }),
             });
@@ -727,7 +727,7 @@
             }
 
             this.notes = '';
-            this.rir   = 2;
+            this.rpe   = 8;
             this.saveSuccess = true;
 
             const ex = this.currentExercise;
@@ -907,22 +907,23 @@
 
         // ── Helpers UI ───────────────────────────────
 
-        rirLabel(n) {
-          return ['Fallo (RPE 10)', '1 rep en recámara (RPE 9)', '2 reps (RPE 8)',
-                  '3 reps (RPE 7)', '4 reps', '5+ reps (fácil)'][n] || '';
+        rpeLabel(n) {
+          return { 6: '4+ reps en recámara (liviano)', 7: '3 reps en recámara',
+                    8: '2 reps en recámara', 9: '1 rep en recámara',
+                    10: 'Fallo total' }[n] || '';
         },
 
-        rirActiveColor(n) {
-          return ['bg-rose-600 text-white', 'bg-orange-500 text-white',
-                  'bg-amber-400 text-zinc-900', 'bg-yellow-300 text-zinc-900',
-                  'bg-emerald-500 text-white', 'bg-emerald-700 text-white'][n] || 'bg-zinc-700';
+        rpeActiveColor(n) {
+          return { 6: 'bg-emerald-500 text-white', 7: 'bg-yellow-300 text-zinc-900',
+                    8: 'bg-amber-400 text-zinc-900', 9: 'bg-orange-500 text-white',
+                    10: 'bg-rose-600 text-white' }[n] || 'bg-zinc-700';
         },
 
-        rirBadgeColor(n) {
+        rpeBadgeColor(n) {
           if (n === null || n === undefined) return '';
-          return ['bg-rose-950 text-rose-400', 'bg-orange-950 text-orange-400',
-                  'bg-amber-950 text-amber-400', 'bg-yellow-950 text-yellow-400',
-                  'bg-emerald-950 text-emerald-400', 'bg-emerald-950 text-emerald-500'][n] || 'bg-zinc-800 text-zinc-500';
+          return { 6: 'bg-emerald-950 text-emerald-400', 7: 'bg-yellow-950 text-yellow-400',
+                    8: 'bg-amber-950 text-amber-400', 9: 'bg-orange-950 text-orange-400',
+                    10: 'bg-rose-950 text-rose-400' }[n] || 'bg-zinc-800 text-zinc-500';
         },
 
         todayDate() {

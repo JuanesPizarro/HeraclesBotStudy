@@ -152,7 +152,7 @@ La app web tiene:
 • Plan del día precargado con sus ejercicios en orden
 • Peso sugerido desde su historial
 • Cronómetro de descanso automático según rango de reps
-• RIR y notas por serie
+• RPE y notas por serie
 
 ════════════════════════════════════
 HERRAMIENTAS DISPONIBLES
@@ -489,7 +489,7 @@ def _build_context(user_id: str) -> dict:
         for ex, sets in groups.items():
             series_str = "  ".join(
                 f"S{i+1}: {s['reps']}r @{s['weight_kg']}kg"
-                + (f" RIR{s['rir']}" if s.get("rir") is not None else "")
+                + (f" RPE{s['rpe']}" if s.get("rpe") is not None else "")
                 + (f" ({s['notes']})" if s.get("notes") else "")
                 for i, s in enumerate(sets)
             )
@@ -512,9 +512,9 @@ def _build_context(user_id: str) -> dict:
                 date = logged_utc.astimezone(tz).strftime("%Y-%m-%d")
             except (ValueError, TypeError):
                 date = w["logged_at"][:10]
-            rir_str = f" RIR {w['rir']}" if w.get("rir") is not None else ""
+            rpe_str = f" RPE {w['rpe']}" if w.get("rpe") is not None else ""
             lines.append(
-                f"• {w['exercise']}: {w['sets']}x{w['reps']} @ {w['weight_kg']}kg{rir_str}  [{date}]"
+                f"• {w['exercise']}: {w['sets']}x{w['reps']} @ {w['weight_kg']}kg{rpe_str}  [{date}]"
             )
         recent_text = "\n".join(lines)
     else:

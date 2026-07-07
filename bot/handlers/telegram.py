@@ -187,7 +187,7 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"🏋️ *Tu app de registro personal:*\n\n"
         f"[Abrir Heracles Web]({app_url})\n\n"
         f"Guarda este enlace en tu celular — es personal y único. "
-        f"Úsalo durante tus sesiones para registrar series con cronómetro y RIR.",
+        f"Úsalo durante tus sesiones para registrar series con cronómetro y RPE.",
         parse_mode="Markdown",
         disable_web_page_preview=True,
     )

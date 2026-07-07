@@ -173,7 +173,7 @@ class UserStore:
         ]
         # Columnas para registro granular desde la app web (serie a serie)
         new_workout_columns = [
-            ("rir",   "INTEGER"),   # Repeticiones en Recámara (0 = fallo, 5 = muy cómodo)
+            ("rpe",   "INTEGER"),   # Esfuerzo percibido (6 = liviano, 10 = fallo)
             ("notes", "TEXT"),      # Sensaciones / observaciones de la serie
         ]
         new_progression_columns = [
@@ -191,6 +191,19 @@ class UserStore:
             existing_workouts = {
                 row[1] for row in conn.execute("PRAGMA table_info(workouts)")
             }
+            # [CONCEPTO: Migración de columna con cambio de escala]
+            # La columna se llamaba "rir" (Repeticiones en Recámara: 0=fallo,
+            # 5=muy cómodo). Pasamos a "rpe" (Esfuerzo Percibido: 6=liviano,
+            # 10=fallo), la escala real que usan powerlifting/hipertrofia.
+            # Como el sentido se invierte, no basta con renombrar la columna:
+            # hay que convertir cada valor viejo a su equivalente en la nueva escala.
+            if "rpe" not in existing_workouts and "rir" in existing_workouts:
+                conn.execute("ALTER TABLE workouts RENAME COLUMN rir TO rpe")
+                conn.execute(
+                    "UPDATE workouts SET rpe = MAX(6, 10 - rpe) WHERE rpe IS NOT NULL"
+                )
+                existing_workouts.discard("rir")
+                existing_workouts.add("rpe")
             for col_name, col_type in new_workout_columns:
                 if col_name not in existing_workouts:
                     conn.execute(
@@ -313,14 +326,14 @@ class UserStore:
         sets: int,
         reps: int,
         weight_kg: float,
-        rir: int | None = None,
+        rpe: int | None = None,
         notes: str | None = None,
     ) -> int:
         """
         Guarda un registro de entrenamiento y devuelve el ID del registro.
 
-        Cuando se llama desde el agente (Telegram): sets>1, rir/notes=None.
-        Cuando se llama desde la app web: sets=1, rir y notes opcionales.
+        Cuando se llama desde el agente (Telegram): sets>1, rpe/notes=None.
+        Cuando se llama desde la app web: sets=1, rpe y notes opcionales.
         """
         # [CONCEPTO: Parámetros con ? en SQL]
         # NUNCA concatenes strings en SQL: f"... WHERE id = {user_id}"
@@ -328,9 +341,9 @@ class UserStore:
         # La librería sanitiza los valores automáticamente.
         with self._get_conn() as conn:
             cursor = conn.execute(
-                """INSERT INTO workouts (user_id, exercise, sets, reps, weight_kg, rir, notes)
+                """INSERT INTO workouts (user_id, exercise, sets, reps, weight_kg, rpe, notes)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, exercise, sets, reps, weight_kg, rir, notes),
+                (user_id, exercise, sets, reps, weight_kg, rpe, notes),
             )
             return cursor.lastrowid
 
@@ -382,7 +395,7 @@ class UserStore:
         lower_names = [n.lower() for n in exercise_names]
         with self._get_conn() as conn:
             rows = conn.execute(
-                f"""SELECT exercise, weight_kg, reps, rir, sets,
+                f"""SELECT exercise, weight_kg, reps, rpe, sets,
                            DATE(logged_at, 'localtime') AS session_date
                     FROM workouts
                     WHERE user_id = ? AND LOWER(exercise) IN ({placeholders})
@@ -484,7 +497,7 @@ class UserStore:
 
         with self._get_conn() as conn:
             rows = conn.execute(
-                """SELECT id, exercise, sets, reps, weight_kg, rir, notes, logged_at
+                """SELECT id, exercise, sets, reps, weight_kg, rpe, notes, logged_at
                    FROM workouts
                    WHERE user_id = ?
                      AND logged_at >= ?
