@@ -46,6 +46,9 @@ Canal Telegram
             • update_equipment    → usuario actualizó su equipamiento
             • log_session_override → modificación temporal de sesión
             • save_routine        → usuario aprueba/confirma una rutina propuesta
+            • save_progression_target → al evaluar una sesión, el agente dicta y
+                                    persiste nuevos objetivos (peso/reps/series/
+                                    tiempo) por ejercicio, sin pedir confirmación
                 │
                 ├── sin tool calls → END              (1 LLM call)
                 └── con tool calls → tools → agent   (2 LLM calls)
@@ -92,7 +95,9 @@ bot/
 ├── agent/
 │   ├── state.py            # AgentState TypedDict (messages + user_id)
 │   ├── tools.py            # save_workout, update_goal, update_equipment,
-│   │                       # log_session_override, save_routine
+│   │                       # log_session_override, save_routine,
+│   │                       # save_progression_target (persiste progresión desde
+│   │                       # el chat y actualiza la rutina general)
 │   ├── nodes.py            # agent_node — contexto completo inyectado:
 │   │                       #   fecha actual (REFERENCIA ABSOLUTA), sesión del día,
 │   │                       #   overrides activos, perfil, rutina, historial
@@ -188,6 +193,12 @@ Al finalizar la sesión, el agente NO sube peso como primera palanca. Orden estr
 3. Peso (solo cuando reps y series ya están al tope) — vuelve next_reps al piso del rango.
 Si el RPE fue alto (9-10) sin completar el rango, se mantiene todo igual (consolidar antes de progresar).
 Ver `_build_progression_prompt` en `bot/handlers/web_api.py` y `apply_progression_to_routine_text` en `bot/agent/nodes.py` (reescribe series/reps/peso en la rutina general persistida).
+
+La misma estrategia aplica en el chat: cuando el usuario pide evaluar una sesión,
+el agente dicta los nuevos objetivos y los persiste con el tool
+`save_progression_target` (una llamada por ejercicio) — no pregunta si registrar.
+El tool guarda en `progression_targets` y reescribe la rutina general, igual que
+`POST /api/session/finish`.
 
 ### Lógica de descanso sugerido en la app web
 El timer se pre-configura según el rango de reps del ejercicio:

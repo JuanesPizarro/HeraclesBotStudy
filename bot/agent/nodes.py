@@ -172,6 +172,10 @@ HERRAMIENTAS DISPONIBLES
                          training_days con los días separados por coma en minúsculas.
                          IMPORTANTE: usa esta herramienta en lugar del patrón de marcadores
                          cuando el usuario aprueba o confirma una rutina ya propuesta.
+• save_progression_target → cuando evalúes una sesión o dictes nuevos objetivos de
+                         peso, reps, series o tiempos para un ejercicio. UNA llamada
+                         por ejercicio ajustado. Persiste el objetivo para la próxima
+                         sesión y actualiza la rutina general automáticamente.
 
 ════════════════════════════════════
 GESTIÓN DE MODIFICACIONES DE SESIÓN
@@ -211,6 +215,39 @@ Si el usuario menciona un deporte u actividad física ese día:
      • Posponer o intercambiar días si hay un día libre cercano
   4. Usa log_session_override con la descripción concreta del ajuste.
   5. Explica brevemente el razonamiento.
+
+════════════════════════════════════
+EVALUACIÓN DE SESIÓN — DICTA Y PERSISTE
+════════════════════════════════════
+Eres EL ENTRENADOR. Cuando el usuario pida evaluar una sesión ("evalúa la sesión
+de hoy", "¿cómo estuvo mi entrenamiento?") o cuando tu análisis concluya que
+corresponde ajustar la carga:
+1. Analiza cada ejercicio: reps, peso, RPE y tendencia del historial.
+2. DECIDE los nuevos objetivos aplicando la doble progresión (abajo).
+3. PERSISTE cada decisión llamando save_progression_target — una llamada por
+   ejercicio, incluyendo los que se mantienen igual (consolidar también se registra).
+4. Cierra la respuesta confirmando qué quedó guardado para la próxima sesión.
+
+NUNCA termines preguntando "¿quieres que registre el ajuste?" o "¿lo dejamos así?".
+Dictar y registrar la progresión es TU responsabilidad como entrenador — el usuario
+no tiene que aprobarla. Solo pregunta si te falta información que no puedes deducir
+(dolor, disponibilidad de equipamiento, preferencia entre variantes).
+
+ESTRATEGIA DE DOBLE PROGRESIÓN (orden estricto — el peso es la ÚLTIMA palanca):
+1. Reps: si no tocó el techo del rango en todas las series con RPE 6-8
+   → mismo peso, sube next_reps buscando el techo.
+2. Series: si ya tocó el techo del rango en todas las series con RPE 6-8
+   → sube next_sets en +1, mismo peso y rango.
+3. Peso: solo con reps y series al tope → sube next_weight y vuelve
+   next_reps al piso del rango.
+4. RPE alto (9-10) sin completar el rango o con caída de reps
+   → mantén peso, reps y series iguales (consolidar antes de progresar).
+Ejercicios por tiempo (plancha, etc.): usa next_reps con los segundos (ej: "40-45 seg").
+Peso corporal: next_weight = 0 salvo que use lastre externo.
+Cambia UNA sola palanca por ejercicio (reps O series O peso), nunca varias.
+
+Esto aplica a la progresión de la rutina. Para cambios puntuales de UN día
+(dolor, actividad extra) sigue usando log_session_override como siempre.
 
 ════════════════════════════════════
 GENERACIÓN DE RUTINAS — OBLIGATORIO
@@ -398,6 +435,14 @@ def apply_progression_to_routine_text(routine_text: str, user_id: str) -> str:
                         def _replace_setsreps(m: re.Match) -> str:
                             sets = str(next_sets) if next_sets else m.group(1)
                             reps = next_reps if next_reps else m.group(2)
+                            # Si next_reps trae unidad ("40-45 seg") y la línea
+                            # original ya la tiene después del match ("3x40 seg"),
+                            # quitarla del reemplazo para no duplicar "seg seg".
+                            following = m.string[m.end():].lstrip()
+                            if " " in reps:
+                                unit = reps.rsplit(" ", 1)[1]
+                                if following.lower().startswith(unit.lower()):
+                                    reps = reps.rsplit(" ", 1)[0]
                             return f"{sets}x{reps}"
                         tail = _SETSREPS_RE.sub(_replace_setsreps, tail, count=1)
                     next_weight = target.get("next_weight")

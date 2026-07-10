@@ -1,4 +1,9 @@
+import datetime
+import zoneinfo
+
 from langchain_core.tools import tool
+
+from bot.config import settings
 from bot.storage.user_store import UserStore
 
 # =====================================================================
@@ -168,7 +173,75 @@ def log_session_override(
     )
 
 
+@tool
+def save_progression_target(
+    user_id: str,
+    exercise: str,
+    next_weight: float,
+    next_reps: str,
+    next_sets: int,
+    basis: str,
+) -> str:
+    """
+    Persiste el objetivo de progresión (peso, reps, series) de UN ejercicio
+    para la próxima sesión. Úsala cuando evalúes una sesión o dictes ajustes
+    de carga, repeticiones, series o tiempos — una llamada por ejercicio.
+
+    El objetivo queda guardado en progression_targets (la app web precarga
+    estos valores) y se reescribe en la rutina general persistida, igual que
+    la progresión calculada al finalizar una sesión web.
+
+    Args:
+        user_id: ID de Telegram del usuario (disponible en el sistema)
+        exercise: Nombre EXACTO del ejercicio tal como aparece en la rutina
+        next_weight: Peso en kg para la próxima sesión (0 para peso corporal sin lastre)
+        next_reps: Rango de reps objetivo (ej: "8-10"). Para ejercicios por
+                   tiempo usa los segundos (ej: "40-45 seg")
+        next_sets: Número de series para la próxima sesión (ej: 3)
+        basis: Justificación breve en ≤10 palabras (ej: "RPE 10 en S3 → consolidar")
+    """
+    tz = zoneinfo.ZoneInfo(settings.TIMEZONE)
+    session_date = datetime.datetime.now(tz).date().strftime("%Y-%m-%d")
+
+    _store.save_progression_target(
+        user_id=user_id,
+        exercise=exercise,
+        next_weight=next_weight,
+        basis=basis,
+        session_date=session_date,
+        next_reps=next_reps or None,
+        next_sets=next_sets or None,
+    )
+
+    # [CONCEPTO: Import diferido para evitar import circular]
+    # nodes.py importa TOOLS desde este módulo; si aquí importáramos nodes
+    # al inicio del archivo, Python fallaría al cargar (A importa B importa A).
+    # Al importar dentro de la función, el import ocurre en tiempo de
+    # ejecución, cuando ambos módulos ya están completamente cargados.
+    from bot.agent.nodes import apply_progression_to_routine_text
+
+    routine = _store.get_active_routine(user_id)
+    if routine:
+        updated_text = apply_progression_to_routine_text(routine["routine_text"], user_id)
+        if updated_text != routine["routine_text"]:
+            _store.update_active_routine_text(user_id, updated_text)
+
+    weight_str = f"{next_weight} kg" if next_weight else "peso corporal"
+    return (
+        f"Progresión guardada para {exercise}: "
+        f"{next_sets}x{next_reps} @ {weight_str} ({basis}). "
+        f"La próxima sesión ya carga estos valores."
+    )
+
+
 # [CONCEPTO: Lista de tools mínima]
-# 3 tools — todos de escritura. Las lecturas (perfil, rutina, historial,
+# 6 tools — todos de escritura. Las lecturas (perfil, rutina, historial,
 # overrides activos) se inyectan en el system prompt sin costo extra.
-TOOLS = [save_workout, update_goal, update_equipment, log_session_override, save_routine]
+TOOLS = [
+    save_workout,
+    update_goal,
+    update_equipment,
+    log_session_override,
+    save_routine,
+    save_progression_target,
+]
