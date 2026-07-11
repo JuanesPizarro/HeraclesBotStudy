@@ -554,10 +554,13 @@ el rendimiento de hoy (series, repeticiones y RPE) y la tendencia del historial,
 aplica la estrategia de doble progresión para cada ejercicio.
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown:
-[
-  {{"exercise": "nombre exacto del ejercicio", "next_weight": 32.5, "next_reps": "8-10", "next_sets": 3, "basis": "justificación breve en ≤10 palabras"}},
-  ...
-]
+{{
+  "evaluacion": "2-3 frases evaluando la sesión en segunda persona: qué salió bien, qué vigilar. Tono de entrenador cercano, español neutro.",
+  "ejercicios": [
+    {{"exercise": "nombre exacto del ejercicio", "next_weight": 32.5, "next_reps": "8-10", "next_sets": 3, "basis": "justificación breve en ≤10 palabras"}},
+    ...
+  ]
+}}
 next_reps es el rango de reps recomendado para la próxima sesión (ej: "8-10", "10-12").
 next_sets es el número de series recomendado (ej: 3, 4). Si el rango de reps o el
 número de series actual ya es correcto, repite el mismo valor — no cambies varias
@@ -612,7 +615,15 @@ async def finish_session(user: dict = Depends(get_current_user)) -> dict:
     try:
         if "```" in raw:
             raw = raw.split("```")[1].lstrip("json").strip()
-        suggestions: list[dict] = _json.loads(raw)
+        parsed = _json.loads(raw)
+        # Formato nuevo: {"evaluacion": "...", "ejercicios": [...]}.
+        # Se acepta también el formato viejo (lista directa) por robustez.
+        if isinstance(parsed, dict):
+            evaluation: str = (parsed.get("evaluacion") or "").strip()
+            suggestions: list[dict] = parsed.get("ejercicios", [])
+        else:
+            evaluation = ""
+            suggestions = parsed
     except Exception:
         return {"suggestions": [], "error": "No se pudo parsear la respuesta del agente"}
 
@@ -640,4 +651,53 @@ async def finish_session(user: dict = Depends(get_current_user)) -> dict:
         if updated_text != routine["routine_text"]:
             _store.update_active_routine_text(uid, updated_text)
 
-    return {"suggestions": suggestions}
+    # Enviar la evaluación al chat de Telegram del usuario.
+    # Si Telegram falla (usuario bloqueó el bot, red, etc.) no rompemos la
+    # respuesta web: la progresión ya quedó persistida.
+    try:
+        await _send_evaluation_to_telegram(uid, evaluation, suggestions)
+    except Exception:
+        pass
+
+    return {"suggestions": suggestions, "evaluation": evaluation}
+
+
+def _fmt_kg(weight: float) -> str:
+    """Formatea kg sin decimales innecesarios: 35.0 → '35', 32.5 → '32.5'."""
+    return str(int(weight)) if float(weight).is_integer() else str(weight)
+
+
+async def _send_evaluation_to_telegram(
+    uid: str, evaluation: str, suggestions: list[dict]
+) -> None:
+    """
+    Envía la evaluación post-sesión al chat de Telegram del usuario.
+
+    [CONCEPTO: Bot standalone para mensajes proactivos]
+    Igual que en n8n_webhook.py: creamos un Bot sin Application para enviar
+    un mensaje desde fuera de un handler de Telegram. El telegram_id del
+    usuario es a la vez su chat_id en conversaciones privadas.
+    """
+    from telegram import Bot
+
+    if not evaluation and not suggestions:
+        return
+
+    lines = ["🏁 Sesión completada — evaluación de hoy", ""]
+    if evaluation:
+        lines += [evaluation, ""]
+    if suggestions:
+        lines.append("Próximos objetivos:")
+        for s in suggestions:
+            ex = s.get("exercise", "").strip()
+            if not ex:
+                continue
+            sets_reps = f"{s['next_sets']}x{s['next_reps']}" if s.get("next_sets") and s.get("next_reps") else ""
+            weight = s.get("next_weight")
+            peso = f" @ {_fmt_kg(weight)}kg" if weight else ""  # 0 = peso corporal, se omite
+            basis = f" — {s['basis']}" if s.get("basis") else ""
+            lines.append(f"• {ex}: {sets_reps}{peso}{basis}")
+
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    async with bot:
+        await bot.send_message(chat_id=uid, text="\n".join(lines))

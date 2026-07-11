@@ -60,8 +60,9 @@ Canal Web (https://gym.perritoemo.online/app?token=xxx)
         ├── GET  /api/session/me      → perfil del usuario               (0 LLM calls)
         ├── POST /api/session/set     → guardar serie (peso/reps/RPE)   (0 LLM calls)
         ├── GET  /api/session/today   → log de la sesión actual         (0 LLM calls)
-        └── POST /api/session/finish  → agente calcula progresión de carga
-                                        y persiste en progression_targets (1 LLM call)
+        └── POST /api/session/finish  → agente calcula progresión de carga,
+                                        la persiste en progression_targets y envía
+                                        la evaluación al chat de Telegram (1 LLM call)
 
 Canal n8n (webhook automation)
         │
