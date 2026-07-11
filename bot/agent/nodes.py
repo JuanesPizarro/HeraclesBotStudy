@@ -467,6 +467,30 @@ def _next_training_day(today_day: str, training_days: list[str]) -> str | None:
     return None
 
 
+def _format_series_line(sets: list[dict]) -> str:
+    """
+    Formatea las series de un ejercicio en una línea compacta para el prompt.
+
+    Maneja los dos orígenes de datos:
+    • App web: cada serie es una fila con sets=1 → se numeran S1, S2, S3...
+    • Chat (save_workout): una fila agregada con sets>1 → se muestra "4x10r".
+    """
+    parts = []
+    serie_n = 0
+    for s in sets:
+        if (s.get("sets") or 1) > 1:
+            part = f"{s['sets']}x{s['reps']}r @{s['weight_kg']}kg"
+        else:
+            serie_n += 1
+            part = f"S{serie_n}: {s['reps']}r @{s['weight_kg']}kg"
+        if s.get("rpe") is not None:
+            part += f" RPE{s['rpe']}"
+        if s.get("notes"):
+            part += f" ({s['notes']})"
+        parts.append(part)
+    return "  ".join(parts)
+
+
 def _build_context(user_id: str) -> dict:
     """
     Construye el contexto del usuario consultando SQLite una sola vez.
@@ -481,7 +505,7 @@ def _build_context(user_id: str) -> dict:
     """
     user = _store.get_user(user_id)
     routine = _store.get_active_routine(user_id)
-    workouts = _store.get_recent_workouts(user_id, limit=5)
+    workouts = _store.get_recent_workouts(user_id, days=5)
     overrides = _store.get_active_overrides(user_id)
 
     # ── Contexto temporal ────────────────────────────────────────────────
@@ -576,40 +600,31 @@ def _build_context(user_id: str) -> dict:
         groups: dict[str, list] = {}
         for w in today_workouts:
             groups.setdefault(w["exercise"], []).append(w)
-        tw_lines = []
-        for ex, sets in groups.items():
-            series_str = "  ".join(
-                f"S{i+1}: {s['reps']}r @{s['weight_kg']}kg"
-                + (f" RPE{s['rpe']}" if s.get("rpe") is not None else "")
-                + (f" ({s['notes']})" if s.get("notes") else "")
-                for i, s in enumerate(sets)
-            )
-            tw_lines.append(f"• {ex}: {series_str}")
+        tw_lines = [
+            f"• {ex}: {_format_series_line(sets)}" for ex, sets in groups.items()
+        ]
         today_done_text = "\n".join(tw_lines)
     else:
         today_done_text = "No hay series registradas hoy todavía."
 
     # ── Historial reciente (sesiones anteriores) ─────────────────────────
-    # [CONCEPTO: Convertir timestamps UTC a fecha local]
-    # logged_at se guarda en UTC. Al mostrar fechas al agente, las convertimos
-    # a la timezone del negocio para que no haya discrepancias con "HOY".
-    if workouts:
+    # Las filas ya traen 'local_date' convertida a la timezone del negocio.
+    # Se agrupa por fecha + ejercicio para que cada sesión pasada se lea como
+    # un bloque completo (con RPE y notas), igual que la sesión de hoy.
+    # Hoy se excluye: ya está en "SESIÓN DE HOY — LO QUE HICISTE".
+    past = [w for w in workouts if w["local_date"] != today_date_str]
+    if past:
+        by_date: dict[str, dict[str, list]] = {}
+        for w in reversed(past):  # orden cronológico para numerar S1, S2...
+            by_date.setdefault(w["local_date"], {}).setdefault(w["exercise"], []).append(w)
         lines = []
-        for w in workouts:
-            try:
-                logged_utc = datetime.datetime.strptime(w["logged_at"], "%Y-%m-%d %H:%M:%S").replace(
-                    tzinfo=datetime.timezone.utc
-                )
-                date = logged_utc.astimezone(tz).strftime("%Y-%m-%d")
-            except (ValueError, TypeError):
-                date = w["logged_at"][:10]
-            rpe_str = f" RPE {w['rpe']}" if w.get("rpe") is not None else ""
-            lines.append(
-                f"• {w['exercise']}: {w['sets']}x{w['reps']} @ {w['weight_kg']}kg{rpe_str}  [{date}]"
-            )
+        for date_str in sorted(by_date, reverse=True):
+            lines.append(f"📅 {date_str}:")
+            for ex, sets in by_date[date_str].items():
+                lines.append(f"• {ex}: {_format_series_line(sets)}")
         recent_text = "\n".join(lines)
     else:
-        recent_text = "Sin entrenamientos registrados todavía."
+        recent_text = "Sin entrenamientos registrados en días anteriores."
 
     return {
         "today": f"{today_display} ({today_day.capitalize()})",

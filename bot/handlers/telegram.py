@@ -244,7 +244,7 @@ async def rutina_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Muestra los últimos 10 entrenamientos directamente desde SQLite.
+    Muestra las sesiones de los últimos días directamente desde SQLite.
 
     [CONCEPTO: Capa 0 — Sin LLM]
     Mismo principio que /rutina: datos estructurados que ya tenemos en DB.
@@ -252,7 +252,7 @@ async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     — lo formateamos en código Python directamente.
     """
     user_id = str(update.effective_user.id)
-    workouts = _store.get_recent_workouts(user_id, limit=10)
+    workouts = _store.get_recent_workouts(user_id, days=7)
 
     if not workouts:
         await update.message.reply_text(
@@ -261,10 +261,28 @@ async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
+    # Agrupar por día y ejercicio: la app web guarda cada serie como una fila
+    # (sets=1), así que las juntamos para leer la sesión completa de un vistazo.
+    by_date: dict[str, dict[str, list]] = {}
+    for w in reversed(workouts):  # orden cronológico dentro de cada día
+        by_date.setdefault(w["local_date"], {}).setdefault(w["exercise"], []).append(w)
+
     lines = ["*Tus últimos entrenamientos:*\n"]
-    for w in workouts:
-        date = w["logged_at"][:10]
-        lines.append(f"• {w['exercise']}: {w['sets']}×{w['reps']} @ {w['weight_kg']}kg  `{date}`")
+    for date_str in sorted(by_date, reverse=True):
+        lines.append(f"`{date_str}`")
+        for ex, sets in by_date[date_str].items():
+            if len(sets) == 1:
+                s = sets[0]
+                lines.append(f"• {ex}: {s['sets']}×{s['reps']} @ {s['weight_kg']}kg")
+            else:
+                reps_str = "/".join(str(s["reps"]) for s in sets)
+                weights = {s["weight_kg"] for s in sets}
+                if len(weights) == 1:
+                    w_str = f"{weights.pop()}kg"
+                else:
+                    w_str = "/".join(str(s["weight_kg"]) for s in sets) + " kg"
+                lines.append(f"• {ex}: {len(sets)} series · {reps_str} reps @ {w_str}")
+        lines.append("")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 

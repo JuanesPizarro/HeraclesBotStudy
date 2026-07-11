@@ -509,18 +509,52 @@ class UserStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def get_recent_workouts(self, user_id: str, limit: int = 10) -> list[dict]:
-        """Retorna los últimos N entrenamientos del usuario, del más reciente al más antiguo."""
+    def get_recent_workouts(self, user_id: str, days: int = 5) -> list[dict]:
+        """
+        Retorna todas las series de los últimos N días con registros (fecha local),
+        de la más reciente a la más antigua, incluyendo RPE y notas.
+
+        [CONCEPTO: Límite por sesión, no por fila]
+        La app web guarda cada serie como una fila individual (sets=1), así que
+        un LIMIT por filas cortaría una sesión a la mitad (una sesión típica son
+        ~15 filas). Aquí el límite es por DÍAS distintos: se recorren las filas
+        de la más nueva a la más vieja y se corta al superar N fechas locales
+        diferentes. Cada fila sale con 'local_date' ya convertida de UTC a la
+        timezone del negocio — importante porque una sesión nocturna puede
+        cruzar la medianoche UTC y quedar partida en dos fechas.
+        """
+        import datetime as _dt
+        import zoneinfo as _zi
+
+        tz = _zi.ZoneInfo(settings.TIMEZONE)
         with self._get_conn() as conn:
             rows = conn.execute(
-                """SELECT exercise, sets, reps, weight_kg, logged_at
+                """SELECT exercise, sets, reps, weight_kg, rpe, notes, logged_at
                    FROM workouts
                    WHERE user_id = ?
                    ORDER BY logged_at DESC
-                   LIMIT ?""",
-                (user_id, limit),
+                   LIMIT 300""",
+                (user_id,),
             ).fetchall()
-            return [dict(row) for row in rows]
+
+        result: list[dict] = []
+        seen_dates: list[str] = []
+        for row in rows:
+            w = dict(row)
+            try:
+                logged_utc = _dt.datetime.strptime(
+                    w["logged_at"], "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=_dt.timezone.utc)
+                local_date = logged_utc.astimezone(tz).date().isoformat()
+            except (ValueError, TypeError):
+                local_date = str(w["logged_at"])[:10]
+            if local_date not in seen_dates:
+                if len(seen_dates) >= days:
+                    break
+                seen_dates.append(local_date)
+            w["local_date"] = local_date
+            result.append(w)
+        return result
 
     def is_onboarding_done(self, telegram_id: str) -> bool:
         """Devuelve True si el usuario completó el onboarding."""
