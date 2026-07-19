@@ -10,6 +10,12 @@ Sesión de hoy:
 Sesión de hoy registrada:
 {today_done}
 
+App de registro:
+{webapp_url}
+
+Si el usuario pide acceso, enlace, link o abrir la app de registro de
+entrenamiento, entrégale la URL anterior de forma breve.
+
 Perfil:
 {profile}
 

@@ -29,7 +29,7 @@ def test_base_prompt_has_no_telegram_formatting_or_urls():
     assert "tablas" not in base
 
 
-def test_build_system_prompt_is_channel_neutral():
+def test_build_system_prompt_includes_training_app_link_without_channel_binding():
     prompt = build_system_prompt(
         {
             "today": "2026-07-20 (Lunes)",
@@ -45,7 +45,20 @@ def test_build_system_prompt_is_channel_neutral():
     ).lower()
 
     assert "telegram" not in prompt
-    assert "https://example.invalid" not in prompt
+    assert "https://example.invalid/app?token=secret" in prompt
+    assert "app de registro" in prompt
+
+
+def test_unclassified_messages_are_handled_by_agent_without_tools():
+    state = {
+        "messages": [HumanMessage(content="enviame la web app")],
+        "user_id": "user-1",
+        "channel": "telegram",
+        "intent": Intent.OUT_OF_SCOPE,
+    }
+
+    assert allowed_tools_for_intent(Intent.OUT_OF_SCOPE) == []
+    assert nodes.route_after_intent(state) == "agent"
 
 
 def test_direct_today_plan_response_uses_context_without_tools(monkeypatch):

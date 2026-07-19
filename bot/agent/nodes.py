@@ -350,11 +350,11 @@ def _build_context(user_id: str) -> dict:
         routine_text = "Sin rutina guardada. Cuando el usuario lo pida, genera una."
 
     # ── Enlace personal a la app web ────────────────────────────────────
-    web_token = user.get("web_token") if user else None
-    if web_token:
+    if user:
+        web_token = _store.get_or_create_web_token(user_id)
         webapp_url = f"{_WEB_URL}/app?token={web_token}"
     else:
-        webapp_url = "(el usuario aún no tiene enlace — usa /webapp para generarlo)"
+        webapp_url = "(enlace no disponible hasta que el usuario complete su perfil)"
 
     # ── Lo que hizo hoy (sesión registrada) ─────────────────────────────
     today_workouts = _store.get_today_workouts(user_id)
@@ -437,7 +437,6 @@ def route_after_intent(state: AgentState) -> str:
         Intent.TODAY_PLAN,
         Intent.ROUTINE,
         Intent.HISTORY,
-        Intent.OUT_OF_SCOPE,
     }:
         return "direct_response"
     return "agent"
