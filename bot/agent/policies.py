@@ -3,6 +3,7 @@ from bot.agent.contracts import Intent
 
 TOOLS_BY_INTENT: dict[Intent, list[str]] = {
     Intent.TODAY_PLAN: [],
+    Intent.ROUTINE: [],
     Intent.HISTORY: [],
     Intent.LOG_WORKOUT: ["save_workout"],
     Intent.MODIFY_SESSION: ["create_session_override_draft"],

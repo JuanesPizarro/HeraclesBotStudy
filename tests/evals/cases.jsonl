@@ -1,3 +1,4 @@
 {"id":"plan_today","message":"¿Qué me corresponde hoy?","expected_intent":"today_plan","allowed_tools":[]}
+{"id":"current_routine","message":"¿Cuál es mi rutina?","expected_intent":"routine","allowed_tools":[]}
 {"id":"temporary_change","message":"Hoy no tengo acceso a las mancuernas","expected_intent":"modify_session","allowed_tools":["create_session_override_draft"]}
 {"id":"routine_confirmation","message":"Sí, aplica esa rutina","expected_intent":"create_routine","allowed_tools":["create_routine_draft"]}

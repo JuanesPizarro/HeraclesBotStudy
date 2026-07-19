@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class Intent(str, Enum):
     TODAY_PLAN = "today_plan"
+    ROUTINE = "routine"
     LOG_WORKOUT = "log_workout"
     MODIFY_SESSION = "modify_session"
     CREATE_ROUTINE = "create_routine"

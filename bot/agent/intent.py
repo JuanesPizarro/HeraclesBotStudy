@@ -18,6 +18,19 @@ def classify_intent_text(message: str) -> Intent:
         return Intent.TODAY_PLAN
     if any(
         phrase in text
+        for phrase in (
+            "mi rutina",
+            "rutina actual",
+            "ver rutina",
+            "muéstrame la rutina",
+            "muestrame la rutina",
+            "cuál es mi rutina",
+            "cual es mi rutina",
+        )
+    ):
+        return Intent.ROUTINE
+    if any(
+        phrase in text
         for phrase in ("historial", "últimos entrenamientos", "ultimos entrenamientos")
     ):
         return Intent.HISTORY

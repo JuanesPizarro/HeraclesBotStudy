@@ -421,6 +421,8 @@ def direct_response_node(state: AgentState) -> dict:
     intent = state.get("intent", Intent.OUT_OF_SCOPE)
     if intent == Intent.TODAY_PLAN:
         response = AgentResponse(message=context["session_today"])
+    elif intent == Intent.ROUTINE:
+        response = AgentResponse(message=context["routine"])
     elif intent == Intent.HISTORY:
         response = AgentResponse(message=context["recent_workouts"])
     else:
@@ -431,7 +433,12 @@ def direct_response_node(state: AgentState) -> dict:
 
 
 def route_after_intent(state: AgentState) -> str:
-    if state.get("intent") in {Intent.TODAY_PLAN, Intent.HISTORY, Intent.OUT_OF_SCOPE}:
+    if state.get("intent") in {
+        Intent.TODAY_PLAN,
+        Intent.ROUTINE,
+        Intent.HISTORY,
+        Intent.OUT_OF_SCOPE,
+    }:
         return "direct_response"
     return "agent"
 

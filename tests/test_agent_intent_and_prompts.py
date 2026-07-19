@@ -13,6 +13,13 @@ def test_today_plan_intent_exposes_no_write_tools():
     assert allowed_tools_for_intent(intent) == []
 
 
+def test_current_routine_intent_exposes_no_write_tools():
+    intent = classify_intent_text("¿Cuál es mi rutina?")
+
+    assert intent == Intent.ROUTINE
+    assert allowed_tools_for_intent(intent) == []
+
+
 def test_base_prompt_has_no_telegram_formatting_or_urls():
     base = "\n".join(load_prompt(name) for name in BASE_PROMPT_FILES).lower()
 
@@ -61,3 +68,25 @@ def test_direct_today_plan_response_uses_context_without_tools(monkeypatch):
 
     assert result["messages"][-1].content == "Hoy corresponde empuje."
     assert result["response"].message == "Hoy corresponde empuje."
+
+
+def test_direct_routine_response_uses_active_routine_context(monkeypatch):
+    monkeypatch.setattr(
+        nodes,
+        "_build_context",
+        lambda user_id: {
+            "session_today": "Hoy corresponde empuje.",
+            "routine": "Rutina activa completa",
+            "recent_workouts": "Sin historial",
+        },
+    )
+    state = {
+        "messages": [HumanMessage(content="muéstrame mi rutina")],
+        "user_id": "user-1",
+        "channel": "telegram",
+        "intent": Intent.ROUTINE,
+    }
+
+    result = nodes.direct_response_node(state)
+
+    assert result["messages"][-1].content == "Rutina activa completa"

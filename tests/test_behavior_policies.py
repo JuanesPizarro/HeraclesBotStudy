@@ -8,6 +8,7 @@ from bot.agent.policies import allowed_tools_for_intent
 
 def test_tool_permissions_match_policy_table():
     assert allowed_tools_for_intent(Intent.TODAY_PLAN) == []
+    assert allowed_tools_for_intent(Intent.ROUTINE) == []
     assert allowed_tools_for_intent(Intent.HISTORY) == []
     assert allowed_tools_for_intent(Intent.LOG_WORKOUT) == ["save_workout"]
     assert allowed_tools_for_intent(Intent.MODIFY_SESSION) == [
