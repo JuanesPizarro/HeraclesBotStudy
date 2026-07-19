@@ -20,6 +20,8 @@ class ProgressionReason(str, Enum):
     BUILD_REPS = "build_reps"
     ADD_SET = "add_set"
     ADD_WEIGHT = "add_weight"
+    REDUCE_WEIGHT = "reduce_weight"
+    REDUCE_SETS = "reduce_sets"
     CONSOLIDATE = "consolidate"
     INSUFFICIENT_DATA = "insufficient_data"
 

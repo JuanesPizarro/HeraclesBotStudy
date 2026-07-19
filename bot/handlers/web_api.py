@@ -727,11 +727,8 @@ def _build_progression_prompt(
     """
     Construye el contexto para que el agente calcule la progresión de carga.
 
-    [CONCEPTO: Agente como experto — sin reglas hardcodeadas]
-    Le pasamos datos crudos (series, RPE, historial) y el perfil del usuario.
-    El agente usa su conocimiento de entrenamiento para decidir la carga,
-    pudiendo aplicar periodización, gestión de fatiga u otras consideraciones
-    que reglas determinísticas no capturarían.
+    El agente propone como entrenador; el backend valida límites de seguridad
+    antes de persistir. Si la respuesta no valida, se usa fallback determinístico.
     """
     today_by_ex: dict[str, list[dict]] = {}
     for s in today_sets:
@@ -780,28 +777,26 @@ SESIÓN COMPLETADA HOY:
 HISTORIAL RECIENTE (últimas sesiones registradas por ejercicio):
 {chr(10).join(lines_hist) or "Sin historial previo"}
 
-ESTRATEGIA DE PROGRESIÓN — DOBLE PROGRESIÓN (orden estricto):
-El peso NO es la primera palanca. Antes de subir peso, agota el margen de
-reps y series dentro del rango objetivo:
-1. Si no completó el TECHO del rango de reps en todas las series con RPE
-   moderado (6-8) → mantén el mismo peso, sube next_reps buscando el techo.
-2. Si ya completó el techo del rango en todas las series con RPE 6-8
-   (hay margen, no llegó al fallo) y el ejercicio admite más volumen antes
-   de subir carga → sube next_sets en +1 (ej: 3→4) manteniendo el mismo
-   peso y el rango de reps.
-3. Solo cuando YA completó el techo del rango en todas las series CON
-   series completas (sin margen de reps ni series por agregar) →
-   ahí recién sube next_weight y vuelve next_reps al piso del rango.
-4. Si el RPE fue alto (9-10) y no completó el rango o falló series
-   → mantén mismo peso, mismas reps, mismas series (consolidar antes de
-   progresar). No subas peso en esta situación.
-Ejercicios de peso corporal (weight_kg=0) siguen la misma lógica pero
-usando solo reps/series como palanca — next_weight se mantiene en 0 salvo
-que el usuario ya esté agregando peso externo (chaleco, disco, banda).
+CRITERIO DE PROGRESIÓN:
+Actúa como entrenador personal. Usa el perfil, objetivo, nivel, equipamiento,
+rendimiento de hoy, RPE, notas y tendencia del historial para decidir la próxima
+prescripción de cada ejercicio.
 
-Basándote en tu criterio como entrenador experto, el perfil del usuario,
-el rendimiento de hoy (series, repeticiones y RPE) y la tendencia del historial,
-aplica la estrategia de doble progresión para cada ejercicio.
+Puedes subir peso, bajar peso, subir o bajar series, ajustar el rango de reps o
+consolidar. La doble progresión es una guía, no una regla rígida: normalmente
+se construyen reps/series antes de subir carga, pero puedes desviarte si el
+historial, la fatiga, el RPE, el estancamiento o el objetivo del usuario lo
+justifican.
+
+Límites que debes respetar:
+• Si hay dolor o molestia reportada, no aumentes carga ni volumen.
+• Si RPE 9-10, evita subir peso salvo que el historial lo justifique de forma
+  muy clara; en general consolida o reduce.
+• No hagas saltos grandes de carga; prefiere incrementos de 2.5 kg.
+• Ejercicios de peso corporal con weight_kg=0 mantienen next_weight=0 salvo
+  que el usuario ya use carga externa registrada.
+• No cambies varias palancas a la vez salvo que sea una descarga o haya una
+  justificación clara.
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown:
 {{
@@ -820,10 +815,11 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown:
 }}
 
 Valores permitidos para reason:
-build_reps, add_set, add_weight, consolidate, insufficient_data.
+build_reps, add_set, add_weight, reduce_weight, reduce_sets, consolidate,
+insufficient_data.
 
 Si el rango de reps o el número de series actual ya es correcto, repite el mismo
-valor. No cambies varias palancas (reps, series, peso) al mismo tiempo."""
+valor."""
 
 
 def _parse_reps_range(value: str) -> tuple[int, int]:
@@ -1045,6 +1041,138 @@ def _calculate_deterministic_suggestions(
     return suggestions
 
 
+def _fallback_suggestion_for_exercise(
+    fallback_suggestions: list[dict], exercise_name: str
+) -> dict | None:
+    for suggestion in fallback_suggestions:
+        if suggestion.get("exercise") == exercise_name:
+            return suggestion
+    return None
+
+
+def _validate_progression_guardrails(
+    suggestion: dict,
+    prescription: Prescription,
+    completed_sets: list[CompletedSet],
+    has_pain: bool,
+) -> None:
+    next_weight = Decimal(str(suggestion["next_weight"]))
+    next_sets = int(suggestion["next_sets"])
+    reps_min, reps_max = _parse_reps_range(str(suggestion["next_reps"]))
+    weight_delta = next_weight - prescription.weight
+
+    if (next_weight * Decimal("10")) % Decimal("5") != 0:
+        raise ValueError("next_weight must use 0.5 kg increments")
+    if next_sets > min(8, prescription.sets + 1):
+        raise ValueError("next_sets can increase by at most one set")
+    if reps_min > reps_max:
+        raise ValueError("next_reps range is invalid")
+    if reps_max > prescription.reps_max + 4:
+        raise ValueError("next_reps is outside the allowed range")
+
+    if prescription.weight == 0 and next_weight != 0:
+        raise ValueError("bodyweight exercise cannot add external load automatically")
+
+    if has_pain and (weight_delta > 0 or next_sets > prescription.sets):
+        raise ValueError("pain report blocks load or volume increases")
+
+    below_min = any(s.reps < prescription.reps_min for s in completed_sets)
+    high_rpe = any(s.rpe is not None and s.rpe >= 9 for s in completed_sets)
+    if (below_min or high_rpe) and weight_delta > 0:
+        raise ValueError("performance or high RPE blocks weight increases")
+
+    if weight_delta > prescription.weight_increment:
+        raise ValueError("weight increase exceeds available increment")
+
+    if weight_delta < 0 and prescription.weight > 0:
+        max_drop = max(
+            prescription.weight * Decimal("0.20"),
+            prescription.weight_increment,
+        )
+        if abs(weight_delta) > max_drop:
+            raise ValueError("weight reduction exceeds safety limit")
+
+
+def _apply_agent_guardrails(
+    user: dict,
+    today_sets: list[dict],
+    today: datetime.date,
+    agent_suggestions: list[dict],
+    fallback_suggestions: list[dict],
+) -> list[dict]:
+    plan = _build_session_plan_payload(user, today=today)
+    planned_by_name = {
+        exercise["name"]: exercise for exercise in plan.get("exercises", [])
+    }
+    rows_by_name = _group_sets_by_exercise(today_sets)
+    accepted_by_name: dict[str, dict] = {}
+
+    for suggestion in agent_suggestions:
+        exercise_name = suggestion.get("exercise", "")
+        rows = rows_by_name.get(exercise_name)
+        if not rows or exercise_name in accepted_by_name:
+            continue
+
+        prescription = _prescription_from_plan_exercise(
+            exercise_name,
+            planned_by_name.get(exercise_name),
+            rows,
+        )
+        completed_sets = _completed_sets_from_rows(rows)
+        has_pain = any(text_reports_pain(row.get("notes")) for row in rows)
+        try:
+            _validate_progression_guardrails(
+                suggestion, prescription, completed_sets, has_pain
+            )
+        except ValueError:
+            fallback = _fallback_suggestion_for_exercise(
+                fallback_suggestions, exercise_name
+            )
+            if fallback is not None:
+                accepted_by_name[exercise_name] = fallback
+            continue
+        accepted_by_name[exercise_name] = suggestion
+
+    validated = []
+    for exercise_name in rows_by_name:
+        suggestion = accepted_by_name.get(exercise_name) or _fallback_suggestion_for_exercise(
+            fallback_suggestions, exercise_name
+        )
+        if suggestion is not None:
+            validated.append(suggestion)
+    return validated
+
+
+async def _calculate_agent_session_evaluation(
+    user: dict,
+    today_sets: list[dict],
+    today: datetime.date,
+    fallback_suggestions: list[dict],
+) -> tuple[str, list[dict]]:
+    from langchain_openai import ChatOpenAI
+
+    exercise_names = list(_group_sets_by_exercise(today_sets).keys())
+    history = _store.get_history_for_exercises(
+        user["telegram_id"], exercise_names, per_exercise=5
+    )
+    llm = ChatOpenAI(
+        model="deepseek-chat",
+        openai_api_key=settings.DEEPSEEK_API_KEY,
+        openai_api_base="https://api.deepseek.com",
+        temperature=0.2,
+    )
+    response = await llm.ainvoke(
+        [HumanMessage(content=_build_progression_prompt(user, today_sets, history))]
+    )
+    evaluation, agent_suggestions = _parse_session_evaluation(
+        response.content, today_sets
+    )
+    suggestions = _apply_agent_guardrails(
+        user, today_sets, today, agent_suggestions, fallback_suggestions
+    )
+    return evaluation, suggestions
+
+
 def _build_summary_prompt(
     user: dict, today_sets: list[dict], suggestions: list[dict]
 ) -> str:
@@ -1125,17 +1253,16 @@ async def _finish_training_session(
     Flujo:
     1. Series completadas hoy → agrupadas por ejercicio
     2. Historial de las últimas 5 sesiones por ejercicio
-    3. Agente LLM analiza y devuelve JSON con next_weight por ejercicio
-    4. Persistir en progression_targets — próxima sesión ya lleva el peso progresado
-    5. Devolver sugerencias al frontend para mostrar en el resumen
+    3. Agente LLM propone la progresión como entrenador
+    4. Backend valida guardrails; si falla, usa fallback determinístico
+    5. Persistir en progression_targets — próxima sesión ya lleva el objetivo
+    6. Devolver sugerencias al frontend para mostrar en el resumen
 
     [CONCEPTO: LLM directo vs LangGraph para tareas de análisis]
     Para análisis de una sola pasada sin tool calls ni memoria conversacional,
     invocar el LLM directamente es más rápido y limpio que pasarlo por el grafo.
     LangGraph aporta valor cuando hay ciclos razonamiento ↔ herramientas.
     """
-    from langchain_openai import ChatOpenAI
-
     uid = user["telegram_id"]
     session = _store.get_training_session(session_id)
     if not session or session["user_id"] != uid:
@@ -1172,26 +1299,24 @@ async def _finish_training_session(
         )
         return result
 
-    suggestions = _calculate_deterministic_suggestions(user, today_sets, today=today)
+    fallback_suggestions = _calculate_deterministic_suggestions(
+        user, today_sets, today=today
+    )
+    suggestions = fallback_suggestions
     evaluation = _local_session_summary(suggestions)
-    try:
-        if settings.DEEPSEEK_API_KEY:
-            llm = ChatOpenAI(
-                model="deepseek-chat",
-                openai_api_key=settings.DEEPSEEK_API_KEY,
-                openai_api_base="https://api.deepseek.com",
-                temperature=0.2,
+    if settings.DEEPSEEK_API_KEY:
+        try:
+            evaluation, suggestions = await _calculate_agent_session_evaluation(
+                user,
+                today_sets,
+                today,
+                fallback_suggestions,
             )
-            response = await llm.ainvoke(
-                [
-                    HumanMessage(
-                        content=_build_summary_prompt(user, today_sets, suggestions)
-                    )
-                ]
-            )
-            evaluation = response.content.strip() or evaluation
-    except Exception:
-        pass
+            if not suggestions:
+                suggestions = fallback_suggestions
+        except Exception:
+            suggestions = fallback_suggestions
+            evaluation = _local_session_summary(suggestions)
 
     # Persistir cada sugerencia
     for item in suggestions:

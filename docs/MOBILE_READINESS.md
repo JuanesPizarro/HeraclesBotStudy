@@ -4,7 +4,7 @@ Current status:
 
 - Tools do not expose model-controlled `user_id`.
 - Critical behavior has automated tests.
-- Progression is deterministic and validated.
+- Progression is agent-proposed, backend-validated, and has a deterministic fallback.
 - Routines support structured drafts and explicit confirmation.
 - Sessions have IDs, states, and idempotent finish behavior.
 - Agent responses have a neutral `AgentResponse` contract.

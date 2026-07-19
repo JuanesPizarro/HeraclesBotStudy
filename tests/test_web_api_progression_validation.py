@@ -171,3 +171,69 @@ def test_deterministic_suggestions_are_repeatable(monkeypatch, store, active_use
     assert first == second
     assert first[0]["next_weight"] == 42.5
     assert first[0]["reason"] == "add_weight"
+
+
+def test_agent_guardrails_accept_safe_weight_reduction(monkeypatch, store, active_user):
+    monkeypatch.setattr(web_api, "_store", store)
+    store.update_training_days(active_user, "lunes")
+    store.save_routine(
+        active_user,
+        "DÍA 1 (Lunes)\n• Press banca: 3x8-10 @ 40 kg\n",
+    )
+    user = store.get_user(active_user)
+    today_sets = [
+        {"exercise": "Press banca", "sets": 1, "reps": 8, "weight_kg": 40, "rpe": 9},
+        {"exercise": "Press banca", "sets": 1, "reps": 7, "weight_kg": 40, "rpe": 10},
+        {"exercise": "Press banca", "sets": 1, "reps": 6, "weight_kg": 40, "rpe": 10},
+    ]
+    fallback = _calculate_deterministic_suggestions(user, today_sets, date(2026, 7, 20))
+    agent_suggestions = [
+        {
+            "exercise": "Press banca",
+            "next_weight": 35.0,
+            "next_reps": "8-10",
+            "next_sets": 3,
+            "reason": "reduce_weight",
+            "basis": "RPE alto y reps caen",
+        }
+    ]
+
+    suggestions = web_api._apply_agent_guardrails(
+        user, today_sets, date(2026, 7, 20), agent_suggestions, fallback
+    )
+
+    assert suggestions == agent_suggestions
+
+
+def test_agent_guardrails_fallback_when_weight_jump_is_unsafe(
+    monkeypatch, store, active_user
+):
+    monkeypatch.setattr(web_api, "_store", store)
+    store.update_training_days(active_user, "lunes")
+    store.save_routine(
+        active_user,
+        "DÍA 1 (Lunes)\n• Press banca: 3x8-10 @ 40 kg\n",
+    )
+    user = store.get_user(active_user)
+    today_sets = [
+        {"exercise": "Press banca", "sets": 1, "reps": 10, "weight_kg": 40, "rpe": 8},
+        {"exercise": "Press banca", "sets": 1, "reps": 10, "weight_kg": 40, "rpe": 8},
+        {"exercise": "Press banca", "sets": 1, "reps": 10, "weight_kg": 40, "rpe": 8},
+    ]
+    fallback = _calculate_deterministic_suggestions(user, today_sets, date(2026, 7, 20))
+    agent_suggestions = [
+        {
+            "exercise": "Press banca",
+            "next_weight": 50.0,
+            "next_reps": "8-10",
+            "next_sets": 3,
+            "reason": "add_weight",
+            "basis": "salto demasiado agresivo",
+        }
+    ]
+
+    suggestions = web_api._apply_agent_guardrails(
+        user, today_sets, date(2026, 7, 20), agent_suggestions, fallback
+    )
+
+    assert suggestions == fallback

@@ -9,7 +9,7 @@ El objetivo inmediato no es construir la aplicación móvil. Primero se estabili
 Resultados esperados:
 
 - El modelo no puede elegir ni modificar la identidad del usuario.
-- Los cálculos de progresión son deterministas y verificables.
+- Las progresiones son propuestas por el agente, validadas por el backend y tienen fallback determinístico.
 - Las respuestas del modelo que producen datos usan esquemas Pydantic.
 - Una rutina propuesta no se guarda sin confirmación explícita.
 - Las operaciones de finalizar sesión son idempotentes.
@@ -27,7 +27,7 @@ Fuera de alcance por ahora:
 
 ## 2. Principios de diseño
 
-1. **El código calcula; el LLM explica.** Las reglas de progresión, permisos, fechas, identidad, validaciones y persistencia pertenecen al backend.
+1. **El agente entrena; el backend valida.** El LLM puede proponer progresiones según perfil, historial y rendimiento, pero permisos, fechas, identidad, guardrails y persistencia pertenecen al backend.
 2. **El estado real vive en la base de datos.** La conversación no reemplaza el perfil, la rutina ni el historial.
 3. **Todo dato generado por un modelo se valida.** Ningún JSON libre se persiste directamente.
 4. **Las escrituras importantes son confirmables y reversibles.** Una rutina completa siempre pasa por borrador y confirmación.
@@ -59,7 +59,7 @@ Riesgos actuales que esta guía corrige:
 - `MemorySaver` pierde conversaciones al reiniciar y puede crecer sin límite.
 - Las rutinas son texto libre interpretado con expresiones regulares.
 - `save_routine` y `<<<RUTINA>>>` implementan dos caminos de persistencia.
-- La progresión depende de una respuesta JSON libre del modelo.
+- La progresión no debe persistir una respuesta JSON libre del modelo: el agente propone bajo contrato y el backend valida límites de seguridad antes de guardar.
 - `finish_session` puede ejecutarse más de una vez.
 - No hay pruebas ni validación estricta de las decisiones del agente.
 
@@ -449,11 +449,14 @@ Capturar el error de límite y devolver un mensaje controlado sin repetir escrit
 
 ---
 
-# Hito 3 — Motor determinista de progresión
+# Hito 3 — Progresión híbrida agente + guardrails
 
 ## Objetivo
 
-Trasladar el cálculo central desde el prompt a una función pura y testeable. El LLM redactará la explicación, pero no decidirá libremente los números.
+Permitir que el agente actúe como entrenador inteligente, usando perfil,
+historial, RPE, notas y evolución personal para proponer la próxima carga. El
+backend no decide todos los números por defecto: valida que la propuesta cumpla
+límites conservadores y usa un motor determinístico solo como fallback.
 
 ## Crear `bot/domain/progression.py`
 
@@ -501,9 +504,10 @@ class ProgressionResult:
     action: ProgressionAction
 ```
 
-## Reglas iniciales
+## Fallback determinístico
 
-Mantenerlas simples y explícitas:
+Mantenerlo simple y explícito para cuando el modelo no esté disponible, su JSON
+no valide o una decisión sea riesgosa:
 
 1. Sin suficientes series o sin prescripción válida: `INSUFFICIENT_DATA`.
 2. Si alguna serie queda bajo el mínimo o existe RPE alto: `CONSOLIDATE`.
@@ -512,22 +516,32 @@ Mantenerlas simples y explícitas:
 5. Si todas alcanzan el techo, ya está en `max_sets` y el esfuerzo permite progresar: `ADD_WEIGHT`, usando exactamente `weight_increment`.
 6. Cambiar una sola palanca por decisión.
 
-No interpretar una molestia o dolor mediante esta función. Esos casos deben salir del flujo automático y crear una propuesta temporal conservadora.
+No interpretar una molestia o dolor mediante esta función. Esos casos deben salir
+del flujo automático y crear una propuesta temporal conservadora.
 
 ## Uso en `finish_session`
 
-Reemplazar el LLM que devuelve números por:
+Flujo objetivo:
 
-```python
-results = [
-    calculate_progression(prescription, completed_sets)
-    for prescription in prescriptions
-]
-```
+1. Construir contexto con perfil, rutina, series de hoy, RPE, notas e historial.
+2. Pedir al agente un `SessionEvaluation` JSON con decisiones por ejercicio.
+3. Validar contrato Pydantic y guardrails de backend.
+4. Aceptar decisiones válidas.
+5. Reemplazar decisiones inválidas o faltantes por fallback determinístico.
+6. Persistir `progression_targets`.
 
-Después enviar al LLM solamente datos ya calculados para generar `summary`.
+Si falla el LLM, la sesión igualmente debe finalizar y guardar decisiones
+conservadoras. La explicación puede usar una plantilla local.
 
-Si falla el LLM, la sesión igualmente debe finalizar y guardar las decisiones. La explicación puede usar una plantilla local.
+## Guardrails mínimos
+
+- No persistir ejercicios desconocidos ni duplicados.
+- Exigir pesos en incrementos disponibles.
+- Bloquear aumentos de peso o volumen si hay dolor o molestia reportada.
+- Bloquear aumentos de peso con RPE alto o rendimiento bajo el mínimo.
+- Limitar aumentos de carga a un incremento disponible por sesión.
+- Permitir reducciones de carga o series dentro de límites razonables.
+- No agregar peso externo automáticamente a ejercicios registrados con 0 kg.
 
 ## Pruebas parametrizadas obligatorias
 
