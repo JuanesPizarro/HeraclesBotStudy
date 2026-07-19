@@ -27,6 +27,7 @@ def test_routine_change_confirmation_intent_allows_routine_draft_tool():
     assert allowed_tools_for_intent(intent) == [
         "create_routine_draft",
         "update_training_days",
+        "update_training_schedule",
     ]
 
 
@@ -37,6 +38,7 @@ def test_training_days_change_intent_allows_calendar_update_tool():
 
     assert intent == Intent.CREATE_ROUTINE
     assert "update_training_days" in allowed_tools_for_intent(intent)
+    assert "update_training_schedule" in allowed_tools_for_intent(intent)
 
 
 def test_base_prompt_has_no_telegram_formatting_or_urls():

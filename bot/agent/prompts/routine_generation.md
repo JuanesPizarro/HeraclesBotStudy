@@ -9,4 +9,7 @@ Cuando generes una rutina completa:
 6. Si el usuario solo cambia días de entrenamiento o distribución semanal y
    mantiene los mismos ejercicios, no crees borrador: usa update_training_days
    después de confirmación explícita.
-7. Si el cambio mezcla calendario y ejercicios nuevos, crea borrador de rutina.
+7. Si el usuario cambia qué bloque cae en cada día, pero mantiene los mismos
+   ejercicios, no crees borrador: usa update_training_schedule con la rutina
+   completa relabelada y los días activos actualizados.
+8. Si el cambio mezcla calendario y ejercicios nuevos, crea borrador de rutina.

@@ -70,6 +70,68 @@ def test_update_training_days_uses_runtime_user_context(monkeypatch, store):
     assert store.get_user("user-b")["training_days"] is None
 
 
+def test_update_training_schedule_relabels_active_routine_without_draft(
+    monkeypatch, store
+):
+    store.upsert_user("user-a", "A")
+    store.save_routine(
+        "user-a",
+        "DÍA 1 (Lunes) - Upper\n"
+        "• Press banca: 3x8-10 @ 40 kg\n"
+        "DÍA 2 (Martes) - Lower\n"
+        "• Sentadilla: 3x8-10 @ 40 kg\n",
+    )
+    monkeypatch.setattr(tools, "_store", store)
+    updated = (
+        "DÍA 1 (Domingo) - Upper\n"
+        "• Press banca: 3x8-10 @ 40 kg\n"
+        "DÍA 2 (Lunes) - Lower\n"
+        "• Sentadilla: 3x8-10 @ 40 kg\n"
+    )
+
+    token = current_agent_context.set(
+        AgentRuntimeContext(user_id="user-a", channel="telegram")
+    )
+    try:
+        result = tools.update_training_schedule.invoke(
+            {
+                "routine_text": updated,
+                "training_days": "domingo,lunes",
+                "reason": "cambio confirmado",
+            }
+        )
+    finally:
+        current_agent_context.reset(token)
+
+    assert "domingo,lunes" in result
+    assert store.get_user("user-a")["training_days"] == "domingo,lunes"
+    assert store.get_active_routine("user-a")["routine_text"] == updated
+
+
+def test_update_training_schedule_rejects_exercise_changes(monkeypatch, store):
+    store.upsert_user("user-a", "A")
+    store.save_routine(
+        "user-a",
+        "DÍA 1 (Lunes) - Upper\n"
+        "• Press banca: 3x8-10 @ 40 kg\n",
+    )
+    monkeypatch.setattr(tools, "_store", store)
+
+    token = current_agent_context.set(
+        AgentRuntimeContext(user_id="user-a", channel="telegram")
+    )
+    try:
+        with pytest.raises(ValueError, match="cannot add or remove exercises"):
+            tools.update_training_schedule.invoke(
+                {
+                    "routine_text": "DÍA 1 (Domingo) - Upper\n• Remo: 3x10\n",
+                    "training_days": "domingo",
+                }
+            )
+    finally:
+        current_agent_context.reset(token)
+
+
 def test_tool_without_runtime_context_fails_before_writing(monkeypatch, store):
     store.upsert_user("user-a", "A")
     monkeypatch.setattr(tools, "_store", store)

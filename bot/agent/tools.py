@@ -1,3 +1,5 @@
+import re
+
 from langchain_core.tools import tool
 
 from bot.agent.runtime import require_agent_context
@@ -44,6 +46,33 @@ _DAY_ALIASES = {
     "sábado": "sábado",
     "domingo": "domingo",
 }
+
+
+def _parse_exercise_names(routine_text: str) -> list[str]:
+    exercises = []
+    for line in routine_text.split("\n"):
+        match = re.match(r"^[•\-\*]\s+([^:]+?):", line.strip())
+        if match:
+            name = match.group(1).strip()
+            if 2 < len(name) < 50:
+                exercises.append(name.lower())
+    return list(dict.fromkeys(exercises))
+
+
+def _normalize_training_days(training_days: str) -> str:
+    normalized_days = []
+    for raw_day in training_days.split(","):
+        key = raw_day.strip().lower()
+        if not key:
+            continue
+        day = _DAY_ALIASES.get(key)
+        if not day:
+            raise ValueError(f"Unsupported training day: {raw_day}")
+        if day not in normalized_days:
+            normalized_days.append(day)
+    if not normalized_days:
+        raise ValueError("At least one training day is required")
+    return ",".join(normalized_days)
 
 
 @tool
@@ -112,23 +141,52 @@ def update_training_days(training_days: str, reason: str = "") -> str:
         reason: Motivo breve del cambio.
     """
     user_id = require_agent_context().user_id
-    normalized_days = []
-    for raw_day in training_days.split(","):
-        key = raw_day.strip().lower()
-        if not key:
-            continue
-        day = _DAY_ALIASES.get(key)
-        if not day:
-            raise ValueError(f"Unsupported training day: {raw_day}")
-        if day not in normalized_days:
-            normalized_days.append(day)
-    if not normalized_days:
-        raise ValueError("At least one training day is required")
-
-    normalized = ",".join(normalized_days)
+    normalized = _normalize_training_days(training_days)
     _store.update_training_days(user_id, normalized)
     suffix = f" Motivo: {reason}" if reason else ""
     return f"Días de entrenamiento actualizados: {normalized}.{suffix}"
+
+
+@tool
+def update_training_schedule(
+    routine_text: str,
+    training_days: str,
+    reason: str = "",
+) -> str:
+    """
+    Actualiza directamente el calendario/distribución de la rutina activa.
+
+    Úsala cuando el usuario confirme cambiar qué bloque cae en cada día
+    manteniendo los mismos ejercicios, por ejemplo: "domingo upper, lunes lower,
+    martes descanso, miércoles push, jueves pull, viernes legs".
+
+    No crea borrador. El backend valida que la lista de ejercicios no cambie
+    respecto de la rutina activa. Si hay ejercicios nuevos, eliminados o
+    cambios de series/reps significativos, usa create_routine_draft.
+
+    Args:
+        routine_text: Texto COMPLETO de la rutina activa con los mismos ejercicios
+                      y los encabezados/días actualizados.
+        training_days: Días activos separados por coma en español.
+        reason: Motivo breve del cambio.
+    """
+    user_id = require_agent_context().user_id
+    active = _store.get_active_routine(user_id)
+    if not active:
+        raise ValueError("Active routine not found")
+    if active.get("routine_json"):
+        raise ValueError("Structured routines must be changed through a routine draft")
+
+    current_exercises = set(_parse_exercise_names(active["routine_text"]))
+    next_exercises = set(_parse_exercise_names(routine_text))
+    if current_exercises != next_exercises:
+        raise ValueError("Schedule updates cannot add or remove exercises")
+
+    normalized = _normalize_training_days(training_days)
+    _store.update_active_routine_text(user_id, routine_text)
+    _store.update_training_days(user_id, normalized)
+    suffix = f" Motivo: {reason}" if reason else ""
+    return f"Calendario de rutina actualizado: {normalized}.{suffix}"
 
 
 @tool
@@ -206,6 +264,7 @@ TOOLS = [
     save_workout,
     create_profile_change_draft,
     update_training_days,
+    update_training_schedule,
     create_session_override_draft,
     create_routine_draft,
 ]
