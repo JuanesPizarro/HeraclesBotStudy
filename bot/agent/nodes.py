@@ -411,8 +411,53 @@ def _latest_human_message(state: AgentState) -> str:
     return str(state["messages"][-1].content)
 
 
+def _is_short_confirmation(text: str) -> bool:
+    normalized = (
+        text.lower()
+        .strip()
+        .replace("í", "i")
+        .replace("́", "")
+        .replace(".", "")
+        .replace("!", "")
+    )
+    return normalized in {
+        "si",
+        "confirmo",
+        "confirmado",
+        "dale",
+        "ok",
+        "aplica",
+        "aplicalo",
+        "hazlo",
+    }
+
+
+def _previous_ai_requested_routine_confirmation(state: AgentState) -> bool:
+    for message in reversed(state["messages"]):
+        if isinstance(message, AIMessage):
+            content = str(message.content).lower()
+            return (
+                "confirmas" in content
+                and (
+                    "update_training_schedule" in content
+                    or "update_training_days" in content
+                    or "calendario" in content
+                    or "rutina activa" in content
+                    or "distribución semanal" in content
+                    or "distribucion semanal" in content
+                )
+            )
+    return False
+
+
 def classify_intent_node(state: AgentState) -> dict:
-    intent = classify_intent_text(_latest_human_message(state))
+    latest = _latest_human_message(state)
+    if _is_short_confirmation(latest) and _previous_ai_requested_routine_confirmation(
+        state
+    ):
+        intent = Intent.CREATE_ROUTINE
+    else:
+        intent = classify_intent_text(latest)
     return {"intent": intent}
 
 

@@ -41,6 +41,27 @@ def test_training_days_change_intent_allows_calendar_update_tool():
     assert "update_training_schedule" in allowed_tools_for_intent(intent)
 
 
+def test_short_confirmation_after_routine_prompt_allows_schedule_tools():
+    state = {
+        "messages": [
+            HumanMessage(
+                content="haz un cambio entero a la rutina general: domingo upper"
+            ),
+            nodes.AIMessage(
+                content="¿Confirmas que quieres aplicar este cambio al calendario de la rutina activa con update_training_schedule?"
+            ),
+            HumanMessage(content="si"),
+        ],
+        "user_id": "user-1",
+        "channel": "telegram",
+    }
+
+    result = nodes.classify_intent_node(state)
+
+    assert result["intent"] == Intent.CREATE_ROUTINE
+    assert "update_training_schedule" in allowed_tools_for_intent(result["intent"])
+
+
 def test_base_prompt_has_no_telegram_formatting_or_urls():
     base = "\n".join(load_prompt(name) for name in BASE_PROMPT_FILES).lower()
 
