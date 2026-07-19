@@ -18,11 +18,13 @@ class Settings:
     Para validación avanzada, usa Pydantic BaseSettings:
       from pydantic_settings import BaseSettings  # pip install pydantic-settings
     """
+
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "changeme")
     PORT: int = int(os.getenv("PORT", "8000"))
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "data/heracles.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     # URL pública del servidor (usada para generar el enlace /webapp en Telegram)
     # Con Cloudflare Tunnel: https://tu-dominio.com
     # Sin dominio (solo local): http://localhost:8000

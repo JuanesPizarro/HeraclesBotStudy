@@ -1,7 +1,9 @@
 from typing import Annotated, Sequence
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+
+from bot.agent.contracts import AgentResponse, Intent
 
 # =====================================================================
 # [CONCEPTO: State en LangGraph — El más importante de entender]
@@ -36,3 +38,9 @@ class AgentState(TypedDict):
     # ID de Telegram del usuario — para persistir datos y personalizar respuestas
     # Este campo se reemplaza (sin reducer) porque siempre es el mismo por thread
     user_id: str
+
+    # Canal que originó la interacción.
+    channel: str
+
+    intent: NotRequired[Intent]
+    response: NotRequired[AgentResponse]

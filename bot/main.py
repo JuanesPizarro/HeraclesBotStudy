@@ -5,20 +5,23 @@ Arranca dos servicios concurrentemente:
   1. Bot de Telegram (polling) — escucha mensajes de usuarios
   2. Servidor FastAPI (uvicorn) — recibe webhooks de n8n
 """
+
 import asyncio
 import logging
+import time
+from fastapi import FastAPI, Request
 import uvicorn
-from fastapi import FastAPI
-
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    level=logging.WARNING,
-)
 
 from bot.config import settings
 from bot.handlers.telegram import create_telegram_app
 from bot.handlers.n8n_webhook import router as n8n_router
 from bot.handlers.web_api import router as web_router
+from bot.observability import log_event, new_request_id, request_id_var
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    level=logging.WARNING,
+)
 
 # =====================================================================
 # [CONCEPTO: FastAPI]
@@ -41,6 +44,26 @@ app = FastAPI(
 # Registrar los routers
 app.include_router(n8n_router)
 app.include_router(web_router)
+
+
+@app.middleware("http")
+async def request_observability_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or new_request_id()
+    token = request_id_var.set(request_id)
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        log_event(
+            "http_request",
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            latency_ms=round((time.perf_counter() - start) * 1000, 2),
+        )
+        return response
+    finally:
+        request_id_var.reset(token)
 
 
 @app.get("/health")

@@ -1,0 +1,1 @@
+"""Dominio puro de entrenamiento."""

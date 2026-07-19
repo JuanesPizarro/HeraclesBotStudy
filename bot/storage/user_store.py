@@ -1,4 +1,5 @@
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Optional
 from bot.config import settings
@@ -46,9 +47,19 @@ class UserStore:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
                     telegram_id  TEXT PRIMARY KEY,
+                    id           TEXT,
                     name         TEXT NOT NULL,
                     goal         TEXT DEFAULT 'ganar fuerza y masa muscular',
                     created_at   TEXT DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS external_identities (
+                    user_id          TEXT NOT NULL,
+                    provider         TEXT NOT NULL,
+                    provider_user_id TEXT NOT NULL,
+                    created_at       TEXT DEFAULT (datetime('now')),
+                    PRIMARY KEY (provider, provider_user_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id)
                 );
 
                 CREATE TABLE IF NOT EXISTS workouts (
@@ -86,7 +97,11 @@ class UserStore:
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id     TEXT NOT NULL,
                     routine_text TEXT NOT NULL,
+                    routine_json TEXT,
                     created_at  TEXT DEFAULT (datetime('now')),
+                    status      TEXT DEFAULT 'active',
+                    version     INTEGER DEFAULT 1,
+                    confirmed_at TEXT,
                     is_active   INTEGER DEFAULT 1,
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 );
@@ -112,6 +127,7 @@ class UserStore:
                     scope        TEXT NOT NULL DEFAULT 'day',
                     modification TEXT NOT NULL,
                     reason       TEXT,
+                    status       TEXT DEFAULT 'active',
                     created_at   TEXT DEFAULT (datetime('now')),
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 );
@@ -140,6 +156,38 @@ class UserStore:
                     PRIMARY KEY (user_id, exercise),
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS training_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    routine_id INTEGER,
+                    scheduled_date TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    evaluated_at TEXT,
+                    evaluation_json TEXT,
+                    idempotency_key TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    UNIQUE(user_id, scheduled_date, routine_id),
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id),
+                    FOREIGN KEY (routine_id) REFERENCES routines(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_training_sessions_user_date
+                    ON training_sessions(user_id, scheduled_date);
+
+                CREATE TABLE IF NOT EXISTS profile_change_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    field TEXT NOT NULL,
+                    new_value TEXT NOT NULL,
+                    reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    created_at TEXT DEFAULT (datetime('now')),
+                    confirmed_at TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+                );
             """)
         # [CONCEPTO: Migraciones incrementales]
         # En producción se usa Alembic o herramientas similares para gestionar
@@ -155,30 +203,48 @@ class UserStore:
         # cid, name, type, notnull, dflt_value, pk
         # Usamos esto para saber qué columnas ya existen antes de añadir.
         new_user_columns = [
-            ("experience_level",      "TEXT"),
-            ("days_per_week",         "INTEGER"),
-            ("session_time_minutes",  "INTEGER"),
-            ("equipment",             "TEXT"),
+            ("experience_level", "TEXT"),
+            ("days_per_week", "INTEGER"),
+            ("session_time_minutes", "INTEGER"),
+            ("equipment", "TEXT"),
             ("home_equipment_detail", "TEXT"),
-            ("daily_activity",        "TEXT"),
-            ("limitations",           "TEXT"),
-            ("level_test_requested",  "INTEGER DEFAULT 0"),
-            ("onboarding_done",       "INTEGER DEFAULT 0"),
-            ("web_token",             "TEXT"),
-            ("training_days",         "TEXT"),
+            ("daily_activity", "TEXT"),
+            ("limitations", "TEXT"),
+            ("level_test_requested", "INTEGER DEFAULT 0"),
+            ("onboarding_done", "INTEGER DEFAULT 0"),
+            ("web_token", "TEXT"),
+            ("training_days", "TEXT"),
             # Control de acceso: 'active' | 'pending' | 'blocked'
             # DEFAULT 'active' para que usuarios existentes no pierdan el acceso.
             # Los usuarios nuevos se insertan explícitamente con 'pending'.
-            ("status",                "TEXT DEFAULT 'active'"),
+            ("status", "TEXT DEFAULT 'active'"),
+            ("id", "TEXT"),
         ]
         # Columnas para registro granular desde la app web (serie a serie)
         new_workout_columns = [
-            ("rpe",   "INTEGER"),   # Esfuerzo percibido (6 = liviano, 10 = fallo)
-            ("notes", "TEXT"),      # Sensaciones / observaciones de la serie
+            ("rpe", "INTEGER"),  # Esfuerzo percibido (6 = liviano, 10 = fallo)
+            ("notes", "TEXT"),  # Sensaciones / observaciones de la serie
+            ("session_id", "TEXT"),  # Sesión idempotente asociada, si existe
         ]
         new_progression_columns = [
-            ("next_reps", "TEXT"),     # Reps sugeridas por el agente (ej: "8-10", "3x10")
-            ("next_sets", "INTEGER"),  # Series sugeridas (doble progresión: reps/series antes que peso)
+            ("next_reps", "TEXT"),  # Reps sugeridas por el agente (ej: "8-10", "3x10")
+            (
+                "next_sets",
+                "INTEGER",
+            ),  # Series sugeridas (doble progresión: reps/series antes que peso)
+        ]
+        new_routine_columns = [
+            ("routine_json", "TEXT"),
+            ("status", "TEXT DEFAULT 'active'"),
+            ("version", "INTEGER DEFAULT 1"),
+            ("confirmed_at", "TEXT"),
+        ]
+        new_session_columns = [
+            ("evaluation_json", "TEXT"),
+            ("idempotency_key", "TEXT"),
+        ]
+        new_override_columns = [
+            ("status", "TEXT DEFAULT 'active'"),
         ]
         with self._get_conn() as conn:
             existing_users = {
@@ -186,9 +252,23 @@ class UserStore:
             }
             for col_name, col_type in new_user_columns:
                 if col_name not in existing_users:
-                    conn.execute(
-                        f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"
-                    )
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+            rows_without_id = conn.execute(
+                "SELECT telegram_id FROM users WHERE id IS NULL"
+            ).fetchall()
+            for row in rows_without_id:
+                conn.execute(
+                    "UPDATE users SET id = ? WHERE telegram_id = ?",
+                    (str(uuid.uuid4()), row["telegram_id"]),
+                )
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_id ON users(id)")
+            conn.execute(
+                """INSERT OR IGNORE INTO external_identities
+                   (user_id, provider, provider_user_id)
+                   SELECT id, 'telegram', telegram_id
+                   FROM users
+                   WHERE id IS NOT NULL"""
+            )
             existing_workouts = {
                 row[1] for row in conn.execute("PRAGMA table_info(workouts)")
             }
@@ -210,6 +290,20 @@ class UserStore:
                     conn.execute(
                         f"ALTER TABLE workouts ADD COLUMN {col_name} {col_type}"
                     )
+            existing_routines = {
+                row[1] for row in conn.execute("PRAGMA table_info(routines)")
+            }
+            for col_name, col_type in new_routine_columns:
+                if col_name not in existing_routines:
+                    conn.execute(
+                        f"ALTER TABLE routines ADD COLUMN {col_name} {col_type}"
+                    )
+            conn.execute(
+                """UPDATE routines
+                   SET status = CASE WHEN is_active = 1 THEN 'active' ELSE 'archived' END,
+                       confirmed_at = COALESCE(confirmed_at, created_at)
+                   WHERE status IS NULL OR status = 'active'"""
+            )
             existing_progression = {
                 row[1] for row in conn.execute("PRAGMA table_info(progression_targets)")
             }
@@ -217,6 +311,22 @@ class UserStore:
                 if col_name not in existing_progression:
                     conn.execute(
                         f"ALTER TABLE progression_targets ADD COLUMN {col_name} {col_type}"
+                    )
+            existing_sessions = {
+                row[1] for row in conn.execute("PRAGMA table_info(training_sessions)")
+            }
+            for col_name, col_type in new_session_columns:
+                if col_name not in existing_sessions:
+                    conn.execute(
+                        f"ALTER TABLE training_sessions ADD COLUMN {col_name} {col_type}"
+                    )
+            existing_overrides = {
+                row[1] for row in conn.execute("PRAGMA table_info(session_overrides)")
+            }
+            for col_name, col_type in new_override_columns:
+                if col_name not in existing_overrides:
+                    conn.execute(
+                        f"ALTER TABLE session_overrides ADD COLUMN {col_name} {col_type}"
                     )
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_web_token ON users(web_token)"
@@ -229,7 +339,15 @@ class UserStore:
             # leyendo los encabezados de sección (DÍA N — ... (Lunes)).
             # Si no hay rutina activa o no se puede parsear, se deja NULL —
             # el usuario lo completará la próxima vez que haga /start.
-            _DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+            _DAYS_ES = [
+                "lunes",
+                "martes",
+                "miércoles",
+                "jueves",
+                "viernes",
+                "sábado",
+                "domingo",
+            ]
             no_days = conn.execute(
                 "SELECT telegram_id FROM users WHERE training_days IS NULL AND onboarding_done = 1"
             ).fetchall()
@@ -241,10 +359,14 @@ class UserStore:
                 if not row:
                     continue
                 import re as _re
+
                 found = []
                 for line in row[0].split("\n"):
                     for day in _DAYS_ES:
-                        if _re.search(rf"\b{_re.escape(day)}\b", line, _re.IGNORECASE) and day not in found:
+                        if (
+                            _re.search(rf"\b{_re.escape(day)}\b", line, _re.IGNORECASE)
+                            and day not in found
+                        ):
                             found.append(day)
                 if found:
                     found.sort(key=lambda d: _DAYS_ES.index(d))
@@ -274,11 +396,27 @@ class UserStore:
             if existing:
                 return False
             # Nuevo usuario: status='pending' hasta que el admin lo apruebe
+            internal_id = str(uuid.uuid4())
             conn.execute(
-                "INSERT INTO users (telegram_id, name, status) VALUES (?, ?, 'pending')",
-                (telegram_id, name),
+                "INSERT INTO users (telegram_id, id, name, status) VALUES (?, ?, ?, 'pending')",
+                (telegram_id, internal_id, name),
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO external_identities
+                   (user_id, provider, provider_user_id)
+                   VALUES (?, 'telegram', ?)""",
+                (internal_id, telegram_id),
             )
             return True
+
+    def get_internal_user_id(self, provider: str, provider_user_id: str) -> str | None:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT user_id FROM external_identities
+                   WHERE provider = ? AND provider_user_id = ?""",
+                (provider, provider_user_id),
+            ).fetchone()
+            return row["user_id"] if row else None
 
     def get_user_status(self, telegram_id: str) -> str:
         """Devuelve el status de acceso del usuario. 'unknown' si no existe."""
@@ -329,6 +467,7 @@ class UserStore:
         weight_kg: float,
         rpe: int | None = None,
         notes: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """
         Guarda un registro de entrenamiento y devuelve el ID del registro.
@@ -342,9 +481,10 @@ class UserStore:
         # La librería sanitiza los valores automáticamente.
         with self._get_conn() as conn:
             cursor = conn.execute(
-                """INSERT INTO workouts (user_id, exercise, sets, reps, weight_kg, rpe, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, exercise, sets, reps, weight_kg, rpe, notes),
+                """INSERT INTO workouts
+                   (user_id, exercise, sets, reps, weight_kg, rpe, notes, session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, exercise, sets, reps, weight_kg, rpe, notes, session_id),
             )
             return cursor.lastrowid
 
@@ -367,6 +507,7 @@ class UserStore:
         Imposible de adivinar por fuerza bruta.
         """
         import secrets
+
         user = self.get_user(telegram_id)
         if user and user.get("web_token"):
             return user["web_token"]
@@ -432,7 +573,15 @@ class UserStore:
                 """INSERT OR REPLACE INTO progression_targets
                    (user_id, exercise, next_weight, next_reps, next_sets, basis, session_date, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                (user_id, exercise, next_weight, next_reps, next_sets, basis, session_date),
+                (
+                    user_id,
+                    exercise,
+                    next_weight,
+                    next_reps,
+                    next_sets,
+                    basis,
+                    session_date,
+                ),
             )
 
     def get_progression_target(self, user_id: str, exercise: str) -> dict | None:
@@ -490,8 +639,9 @@ class UserStore:
         today_local = now_local.date()
 
         # Inicio y fin del día en timezone local, convertidos a UTC para comparar
-        start_utc = _dt.datetime(today_local.year, today_local.month, today_local.day,
-                                 tzinfo=tz).astimezone(_dt.timezone.utc)
+        start_utc = _dt.datetime(
+            today_local.year, today_local.month, today_local.day, tzinfo=tz
+        ).astimezone(_dt.timezone.utc)
         end_utc = start_utc + _dt.timedelta(days=1)
 
         start_str = start_utc.strftime("%Y-%m-%d %H:%M:%S")
@@ -499,13 +649,40 @@ class UserStore:
 
         with self._get_conn() as conn:
             rows = conn.execute(
-                """SELECT id, exercise, sets, reps, weight_kg, rpe, notes, logged_at
+                """SELECT id, exercise, sets, reps, weight_kg, rpe, notes, logged_at, session_id
                    FROM workouts
                    WHERE user_id = ?
                      AND logged_at >= ?
                      AND logged_at < ?
                    ORDER BY logged_at ASC""",
                 (user_id, start_str, end_str),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_workouts_for_date(self, user_id: str, local_date: str) -> list[dict]:
+        import datetime as _dt
+        import zoneinfo as _zi
+
+        tz = _zi.ZoneInfo(settings.TIMEZONE)
+        day = _dt.date.fromisoformat(local_date)
+        start_utc = _dt.datetime(day.year, day.month, day.day, tzinfo=tz).astimezone(
+            _dt.timezone.utc
+        )
+        end_utc = start_utc + _dt.timedelta(days=1)
+
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT id, exercise, sets, reps, weight_kg, rpe, notes, logged_at, session_id
+                   FROM workouts
+                   WHERE user_id = ?
+                     AND logged_at >= ?
+                     AND logged_at < ?
+                   ORDER BY logged_at ASC""",
+                (
+                    user_id,
+                    start_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                    end_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                ),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -589,6 +766,7 @@ class UserStore:
         scope: str,
         modification: str,
         reason: str | None = None,
+        status: str = "active",
     ) -> int:
         """
         Registra una modificación temporal a la sesión de entrenamiento.
@@ -600,11 +778,96 @@ class UserStore:
         """
         with self._get_conn() as conn:
             cursor = conn.execute(
-                """INSERT INTO session_overrides (user_id, target_date, scope, modification, reason)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (user_id, target_date, scope, modification, reason),
+                """INSERT INTO session_overrides
+                   (user_id, target_date, scope, modification, reason, status)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (user_id, target_date, scope, modification, reason, status),
             )
             return cursor.lastrowid
+
+    def create_session_override_draft(
+        self,
+        user_id: str,
+        target_date: str,
+        scope: str,
+        modification: str,
+        reason: str | None = None,
+    ) -> int:
+        return self.save_session_override(
+            user_id=user_id,
+            target_date=target_date,
+            scope=scope,
+            modification=modification,
+            reason=reason,
+            status="draft",
+        )
+
+    def confirm_session_override_draft(self, user_id: str, override_id: int) -> int:
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                """UPDATE session_overrides
+                   SET status = 'active'
+                   WHERE id = ? AND user_id = ? AND status = 'draft'""",
+                (override_id, user_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("Session override draft not found")
+            return override_id
+
+    def cancel_session_override_draft(self, user_id: str, override_id: int) -> None:
+        with self._get_conn() as conn:
+            conn.execute(
+                """UPDATE session_overrides
+                   SET status = 'archived'
+                   WHERE id = ? AND user_id = ? AND status = 'draft'""",
+                (override_id, user_id),
+            )
+
+    def create_profile_change_draft(
+        self,
+        user_id: str,
+        field: str,
+        new_value: str,
+        reason: str | None = None,
+    ) -> int:
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                """INSERT INTO profile_change_drafts
+                   (user_id, field, new_value, reason)
+                   VALUES (?, ?, ?, ?)""",
+                (user_id, field, new_value, reason),
+            )
+            return cursor.lastrowid
+
+    def confirm_profile_change_draft(self, user_id: str, draft_id: int) -> int:
+        with self._get_conn() as conn:
+            draft = conn.execute(
+                """SELECT field, new_value FROM profile_change_drafts
+                   WHERE id = ? AND user_id = ? AND status = 'draft'""",
+                (draft_id, user_id),
+            ).fetchone()
+            if not draft:
+                raise ValueError("Profile change draft not found")
+            field = draft["field"]
+            if field == "goal":
+                conn.execute(
+                    "UPDATE users SET goal = ? WHERE telegram_id = ?",
+                    (draft["new_value"], user_id),
+                )
+            elif field == "home_equipment_detail":
+                conn.execute(
+                    "UPDATE users SET home_equipment_detail = ? WHERE telegram_id = ?",
+                    (draft["new_value"], user_id),
+                )
+            else:
+                raise ValueError("Unsupported profile field")
+            conn.execute(
+                """UPDATE profile_change_drafts
+                   SET status = 'active', confirmed_at = datetime('now')
+                   WHERE id = ? AND user_id = ?""",
+                (draft_id, user_id),
+            )
+            return draft_id
 
     def get_active_overrides(self, user_id: str) -> list[dict]:
         """
@@ -614,11 +877,16 @@ class UserStore:
         7 días es suficiente para que el agente vea cambios de "esta semana"
         sin cargar demasiado el system prompt con datos irrelevantes.
         """
+        import datetime as _dt
+        import zoneinfo as _zi
+
         from bot.config import settings as _settings
-        import datetime as _dt, zoneinfo as _zi
+
         tz = _zi.ZoneInfo(_settings.TIMEZONE)
         today_str = _dt.datetime.now(tz).date().strftime("%Y-%m-%d")
-        next_week_str = (_dt.datetime.now(tz).date() + _dt.timedelta(days=7)).strftime("%Y-%m-%d")
+        next_week_str = (_dt.datetime.now(tz).date() + _dt.timedelta(days=7)).strftime(
+            "%Y-%m-%d"
+        )
         with self._get_conn() as conn:
             rows = conn.execute(
                 """SELECT target_date, scope, modification, reason
@@ -626,6 +894,7 @@ class UserStore:
                    WHERE user_id = ?
                      AND target_date >= ?
                      AND target_date <= ?
+                     AND status = 'active'
                    ORDER BY target_date ASC""",
                 (user_id, today_str, next_week_str),
             ).fetchall()
@@ -665,9 +934,17 @@ class UserStore:
                        onboarding_done       = 1
                    WHERE telegram_id = ?""",
                 (
-                    training_days, days_count, session_time_minutes, equipment,
-                    home_equipment_detail, experience_level, daily_activity,
-                    limitations, goal, int(level_test_requested), telegram_id,
+                    training_days,
+                    days_count,
+                    session_time_minutes,
+                    equipment,
+                    home_equipment_detail,
+                    experience_level,
+                    daily_activity,
+                    limitations,
+                    goal,
+                    int(level_test_requested),
+                    telegram_id,
                 ),
             )
 
@@ -677,7 +954,12 @@ class UserStore:
             rows = conn.execute("SELECT telegram_id FROM users").fetchall()
             return [row["telegram_id"] for row in rows]
 
-    def save_routine(self, user_id: str, routine_text: str) -> int:
+    def save_routine(
+        self,
+        user_id: str,
+        routine_text: str,
+        routine_json: str | None = None,
+    ) -> int:
         """
         Guarda la rutina activa del usuario. Desactiva cualquier rutina anterior.
 
@@ -689,25 +971,100 @@ class UserStore:
         rollback si hay excepción.
         """
         with self._get_conn() as conn:
+            version = self._next_routine_version(conn, user_id)
             # Desactivar rutina anterior (si existe)
             conn.execute(
-                "UPDATE routines SET is_active = 0 WHERE user_id = ? AND is_active = 1",
+                """UPDATE routines
+                   SET is_active = 0, status = 'archived'
+                   WHERE user_id = ? AND is_active = 1""",
                 (user_id,),
             )
             # Insertar la nueva como activa
             cursor = conn.execute(
-                "INSERT INTO routines (user_id, routine_text) VALUES (?, ?)",
-                (user_id, routine_text),
+                """INSERT INTO routines
+                   (user_id, routine_text, routine_json, status, version, confirmed_at, is_active)
+                   VALUES (?, ?, ?, 'active', ?, datetime('now'), 1)""",
+                (user_id, routine_text, routine_json, version),
             )
             return cursor.lastrowid
+
+    def create_routine_draft(
+        self,
+        user_id: str,
+        routine_text: str,
+        routine_json: str | None = None,
+    ) -> int:
+        """Guarda una rutina como borrador sin modificar la rutina activa."""
+        with self._get_conn() as conn:
+            version = self._next_routine_version(conn, user_id)
+            cursor = conn.execute(
+                """INSERT INTO routines
+                   (user_id, routine_text, routine_json, status, version, is_active)
+                   VALUES (?, ?, ?, 'draft', ?, 0)""",
+                (user_id, routine_text, routine_json, version),
+            )
+            return cursor.lastrowid
+
+    def confirm_routine_draft(self, user_id: str, routine_id: int) -> int:
+        """Activa un borrador y archiva cualquier rutina activa previa."""
+        with self._get_conn() as conn:
+            draft = conn.execute(
+                """SELECT id FROM routines
+                   WHERE id = ? AND user_id = ? AND status = 'draft'""",
+                (routine_id, user_id),
+            ).fetchone()
+            if not draft:
+                raise ValueError("Routine draft not found")
+            conn.execute(
+                """UPDATE routines
+                   SET is_active = 0, status = 'archived'
+                   WHERE user_id = ? AND is_active = 1""",
+                (user_id,),
+            )
+            conn.execute(
+                """UPDATE routines
+                   SET is_active = 1, status = 'active', confirmed_at = datetime('now')
+                   WHERE id = ? AND user_id = ?""",
+                (routine_id, user_id),
+            )
+            return routine_id
+
+    def cancel_routine_draft(self, user_id: str, routine_id: int) -> None:
+        """Archiva un borrador sin modificar datos activos."""
+        with self._get_conn() as conn:
+            conn.execute(
+                """UPDATE routines
+                   SET status = 'archived', is_active = 0
+                   WHERE id = ? AND user_id = ? AND status = 'draft'""",
+                (routine_id, user_id),
+            )
+
+    def get_routine(self, user_id: str, routine_id: int) -> Optional[dict]:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT id, routine_text, routine_json, created_at, status,
+                          version, confirmed_at, is_active
+                   FROM routines
+                   WHERE id = ? AND user_id = ?""",
+                (routine_id, user_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def _next_routine_version(self, conn: sqlite3.Connection, user_id: str) -> int:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM routines WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return int(row["next_version"])
 
     def get_active_routine(self, user_id: str) -> Optional[dict]:
         """Devuelve la rutina activa del usuario, o None si no tiene ninguna."""
         with self._get_conn() as conn:
             row = conn.execute(
-                """SELECT routine_text, created_at
+                """SELECT id, routine_text, routine_json, created_at, status,
+                          version, confirmed_at
                    FROM routines
-                   WHERE user_id = ? AND is_active = 1
+                   WHERE user_id = ? AND is_active = 1 AND status = 'active'
                    ORDER BY id DESC
                    LIMIT 1""",
                 (user_id,),
@@ -729,3 +1086,94 @@ class UserStore:
                 "UPDATE routines SET routine_text = ? WHERE user_id = ? AND is_active = 1",
                 (routine_text, user_id),
             )
+
+    def get_or_create_training_session(
+        self,
+        user_id: str,
+        scheduled_date: str,
+        routine_id: int | None,
+    ) -> dict:
+        session_id = f"{user_id}:{scheduled_date}:{routine_id or 'none'}"
+        with self._get_conn() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO training_sessions
+                   (id, user_id, routine_id, scheduled_date, status)
+                   VALUES (?, ?, ?, ?, 'planned')""",
+                (session_id, user_id, routine_id, scheduled_date),
+            )
+            row = conn.execute(
+                "SELECT * FROM training_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return dict(row)
+
+    def attach_workouts_to_session(self, user_id: str, session_id: str) -> None:
+        with self._get_conn() as conn:
+            conn.execute(
+                """UPDATE workouts
+                   SET session_id = ?
+                   WHERE user_id = ?
+                     AND session_id IS NULL
+                     AND logged_at >= (SELECT scheduled_date || ' 00:00:00'
+                                       FROM training_sessions WHERE id = ?)
+                     AND logged_at < date((SELECT scheduled_date
+                                           FROM training_sessions WHERE id = ?), '+1 day') || ' 00:00:00'""",
+                (session_id, user_id, session_id, session_id),
+            )
+
+    def get_training_session(self, session_id: str) -> Optional[dict]:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM training_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def begin_session_evaluation(
+        self, session_id: str, idempotency_key: str | None = None
+    ) -> dict:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM training_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Training session not found")
+            session = dict(row)
+            if session["status"] == "evaluated":
+                return session
+            if session["status"] == "completed" and not session.get("evaluation_json"):
+                raise ValueError("Training session evaluation already in progress")
+            conn.execute(
+                """UPDATE training_sessions
+                   SET status = 'completed',
+                       completed_at = COALESCE(completed_at, datetime('now')),
+                       idempotency_key = COALESCE(idempotency_key, ?)
+                   WHERE id = ? AND status IN ('planned', 'in_progress')""",
+                (idempotency_key, session_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM training_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return dict(row)
+
+    def complete_session_evaluation(
+        self,
+        session_id: str,
+        evaluation_json: str,
+    ) -> dict:
+        with self._get_conn() as conn:
+            conn.execute(
+                """UPDATE training_sessions
+                   SET status = 'evaluated',
+                       evaluated_at = COALESCE(evaluated_at, datetime('now')),
+                       evaluation_json = COALESCE(evaluation_json, ?)
+                   WHERE id = ?""",
+                (evaluation_json, session_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM training_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return dict(row)

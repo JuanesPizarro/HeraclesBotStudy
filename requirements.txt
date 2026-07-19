@@ -38,3 +38,10 @@ python-dotenv>=1.0.0
 # Pydantic v2 — validación de datos con type hints (FastAPI lo usa internamente)
 # Aprende más: https://docs.pydantic.dev/
 pydantic>=2.0
+
+# Persistencia PostgreSQL / migraciones
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+alembic>=1.13
+psycopg[binary]>=3.2
+langgraph-checkpoint-postgres>=3.1

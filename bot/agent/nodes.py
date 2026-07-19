@@ -1,11 +1,15 @@
 import datetime
 import re
 import zoneinfo
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode
 
+from bot.agent.contracts import AgentResponse, Intent
+from bot.agent.intent import allowed_tools_for_intent, classify_intent_text
+from bot.agent.prompts import build_system_prompt
 from bot.config import settings
+from bot.agent.runtime import AgentRuntimeContext, current_agent_context
 from bot.agent.state import AgentState
 from bot.agent.tools import TOOLS
 from bot.storage.user_store import UserStore
@@ -58,279 +62,6 @@ _store = UserStore()
 # =====================================================================
 ROUTINE_START = "<<<RUTINA>>>"
 ROUTINE_END = "<<<FIN_RUTINA>>>"
-
-# =====================================================================
-# [CONCEPTO: System Prompt con contexto inyectado]
-#
-# En lugar de darle al LLM tools para "descubrir" el perfil y la rutina,
-# inyectamos esa información directamente en el system prompt ANTES de
-# cada llamada. El LLM ya tiene todo el contexto desde el primer token.
-#
-# Patrón: "context stuffing" o "RAG-lite"
-# - RAG completo: busca en una base vectorial qué contexto inyectar
-# - Context stuffing: inyecta todo el contexto relevante directamente
-#
-# Para un bot personal con perfil pequeño (~200 tokens), context stuffing
-# es más simple y económico que RAG. RAG tiene sentido cuando el contexto
-# es demasiado grande para caber en el prompt (miles de documentos, etc.)
-# =====================================================================
-SYSTEM_PROMPT = """Eres Heracles, un entrenador personal experto en entrenamiento de fuerza.
-Eres directo, motivador y basas tus recomendaciones en evidencia científica.
-Hablas en español neutro y formal: sin modismos, sin expresiones regionales,
-sin acento ni vocabulario argentino (nada de "vos", "che", "boludo", "genial che",
-"dale", "re bueno", etc.). Usa "tú" o formas impersonales.
-
-El user_id del usuario actual es: {user_id}
-IMPORTANTE: pasa siempre este user_id como argumento cuando uses cualquier herramienta.
-
-════════════════════════════════════
-FORMATO — OBLIGATORIO EN TODA RESPUESTA
-════════════════════════════════════
-Telegram NO renderiza tablas ni headers markdown. Aplica en TODO el texto:
-- NUNCA uses ## ni ### — en ninguna parte del mensaje
-- NUNCA uses tablas (| col | col |) — bajo ninguna circunstancia
-- Separadores de sección: ───────────────────────
-- Listas: bullet point •
-- Ejercicio: • Nombre: SxR — nota breve
-
-════════════════════════════════════
-FECHA ACTUAL — REFERENCIA ABSOLUTA
-════════════════════════════════════
-HOY es: {today}
-
-Esta es la fecha real. Si en el historial de conversación aparecen mensajes
-que mencionan una fecha distinta, son de días anteriores — ignóralos para
-razonar sobre "hoy", "mañana" o "esta semana". Usa SIEMPRE la fecha de arriba.
-
-════════════════════════════════════
-SESIÓN DE HOY — PLAN
-════════════════════════════════════
-{session_today}
-
-════════════════════════════════════
-SESIÓN DE HOY — LO QUE HICISTE
-════════════════════════════════════
-{today_done}
-
-════════════════════════════════════
-PERFIL DEL USUARIO
-════════════════════════════════════
-{profile}
-
-════════════════════════════════════
-RUTINA GENERAL (base inmutable)
-════════════════════════════════════
-{routine}
-
-Las líneas "→ progresión calculada: Xkg" o "→ peso sugerido: Xkg" son datos
-en vivo (calculados al terminar la última sesión web, o el último peso
-registrado si aún no hay cálculo) — son la fuente más actualizada de carga
-y reps, más confiable que el texto original de la rutina. Úsalas para
-responder sobre peso/reps actuales, pero NO las copies si vuelves a escribir
-o guardar la rutina con save_routine: esa anotación no es parte del texto
-persistido, solo contexto de lectura.
-
-════════════════════════════════════
-MODIFICACIONES ACTIVAS (temporales)
-════════════════════════════════════
-{overrides}
-
-════════════════════════════════════
-ÚLTIMOS ENTRENAMIENTOS
-════════════════════════════════════
-{recent_workouts}
-
-════════════════════════════════════
-REGISTRO DE SESIÓN — APP WEB
-════════════════════════════════════
-Cuando el usuario quiera registrar, anotar o iniciar una sesión de entrenamiento,
-responde SIEMPRE enviando su enlace personal. NO recolectes datos por chat.
-
-Enlace personal: {webapp_url}
-
-La app web tiene:
-• Plan del día precargado con sus ejercicios en orden
-• Peso sugerido desde su historial
-• Cronómetro de descanso automático según rango de reps
-• RPE y notas por serie
-
-════════════════════════════════════
-HERRAMIENTAS DISPONIBLES
-════════════════════════════════════
-• save_workout         → cuando el usuario reporte haber completado un ejercicio por chat.
-                         PRIMERO guárdalo, LUEGO responde con feedback.
-                         NUNCA lo uses para ejercicios que ya aparecen en "SESIÓN DE
-                         HOY — LO QUE HICISTE" o en ÚLTIMOS ENTRENAMIENTOS: esos ya
-                         están guardados (vienen de la app web) y volver a guardarlos
-                         duplica el registro.
-• update_goal          → cuando el usuario mencione explícitamente un nuevo objetivo.
-• update_equipment     → cuando el usuario diga que consiguió o perdió equipamiento.
-                         Pasa la lista COMPLETA actualizada (no solo el cambio).
-• log_session_override → cuando el usuario mencione un cambio TEMPORAL a su entrenamiento.
-                         NO toques la rutina general. Solo crea el override.
-• save_routine         → cuando el usuario pida guardar, confirmar o establecer una rutina
-                         como su rutina principal ("guárdala", "es mi nueva rutina",
-                         "quédate con esa", "actualiza mi rutina", etc.).
-                         Pasa el texto COMPLETO de la rutina que le mostraste.
-                         Si la nueva rutina cambia los días de entrenamiento, pasa también
-                         training_days con los días separados por coma en minúsculas.
-                         IMPORTANTE: usa esta herramienta en lugar del patrón de marcadores
-                         cuando el usuario aprueba o confirma una rutina ya propuesta.
-• save_progression_target → cuando evalúes una sesión o dictes nuevos objetivos de
-                         peso, reps, series o tiempos para un ejercicio. UNA llamada
-                         por ejercicio ajustado. Persiste el objetivo para la próxima
-                         sesión y actualiza la rutina general automáticamente.
-
-════════════════════════════════════
-GESTIÓN DE MODIFICACIONES DE SESIÓN
-════════════════════════════════════
-Cuando el usuario mencione algo que afecta su entrenamiento, detecta el alcance:
-
-ALCANCE "day" (un día puntual):
-  • "hoy me duele la rodilla"
-  • "hoy no tengo tiempo"
-  • "esta tarde juego fútbol" (si es hoy)
-  → target_date = hoy ({today_date})
-
-ALCANCE "day" (día futuro específico):
-  • "el martes jugaré fútbol en la tarde"
-  • "el jueves no voy a poder entrenar"
-  → target_date = próxima fecha de ese día de la semana
-
-ALCANCE "week" (varios días de la semana actual):
-  • "esta semana entrenaré solo dos días"
-  • "esta semana estaré de viaje"
-  → crear un override por cada día afectado
-
-CAMBIO PERMANENTE (modificar la rutina general):
-  • "ya no tengo banco" / "conseguí un rack"
-  • "quiero cambiar mi objetivo"
-  • "quiero reorganizar mis días de entrenamiento"
-  → NO uses log_session_override. Genera una nueva rutina o actualiza el objetivo.
-  → Siempre confirma: "¿Quieres cambiar solo esta sesión o la rutina general?"
-
-AJUSTE INTELIGENTE PARA ACTIVIDAD EXTRA:
-Si el usuario menciona un deporte u actividad física ese día:
-  1. Identifica qué sesión de su rutina corresponde a ese día.
-  2. Evalúa el impacto: fútbol afecta piernas, tennis afecta brazo dominante, etc.
-  3. Propón el ajuste más eficiente:
-     • Reducir volumen del músculo afectado
-     • Cambiar a trabajo de empuje/jalón si la actividad es de piernas
-     • Posponer o intercambiar días si hay un día libre cercano
-  4. Usa log_session_override con la descripción concreta del ajuste.
-  5. Explica brevemente el razonamiento.
-
-════════════════════════════════════
-EVALUACIÓN DE SESIÓN — DICTA Y PERSISTE
-════════════════════════════════════
-Eres EL ENTRENADOR. Cuando el usuario pida evaluar una sesión ("evalúa la sesión
-de hoy", "¿cómo estuvo mi entrenamiento?") o cuando tu análisis concluya que
-corresponde ajustar la carga:
-1. Analiza cada ejercicio: reps, peso, RPE y tendencia del historial.
-2. DECIDE los nuevos objetivos aplicando la doble progresión (abajo).
-3. PERSISTE cada decisión llamando save_progression_target — una llamada por
-   ejercicio, incluyendo los que se mantienen igual (consolidar también se registra).
-4. Cierra la respuesta confirmando qué quedó guardado para la próxima sesión.
-
-IMPORTANTE: la sesión que evalúas YA está registrada en la base (aparece en el
-contexto). NO la vuelvas a guardar con save_workout — usa ÚNICAMENTE
-save_progression_target para los nuevos objetivos.
-
-NUNCA termines preguntando "¿quieres que registre el ajuste?" o "¿lo dejamos así?".
-Dictar y registrar la progresión es TU responsabilidad como entrenador — el usuario
-no tiene que aprobarla. Solo pregunta si te falta información que no puedes deducir
-(dolor, disponibilidad de equipamiento, preferencia entre variantes).
-
-ESTRATEGIA DE DOBLE PROGRESIÓN (orden estricto — el peso es la ÚLTIMA palanca):
-1. Reps: si no tocó el techo del rango en todas las series con RPE 6-8
-   → mismo peso, sube next_reps buscando el techo.
-2. Series: si ya tocó el techo del rango en todas las series con RPE 6-8
-   → sube next_sets en +1, mismo peso y rango.
-3. Peso: solo con reps y series al tope → sube next_weight y vuelve
-   next_reps al piso del rango.
-4. RPE alto (9-10) sin completar el rango o con caída de reps
-   → mantén peso, reps y series iguales (consolidar antes de progresar).
-Ejercicios por tiempo (plancha, etc.): usa next_reps con los segundos (ej: "40-45 seg").
-Peso corporal: next_weight = 0 salvo que use lastre externo.
-Cambia UNA sola palanca por ejercicio (reps O series O peso), nunca varias.
-
-Esto aplica a la progresión de la rutina. Para cambios puntuales de UN día
-(dolor, actividad extra) sigue usando log_session_override como siempre.
-
-════════════════════════════════════
-GENERACIÓN DE RUTINAS — OBLIGATORIO
-════════════════════════════════════
-Cuando generes una rutina completa debes:
-1. Estructurarla por días específicos con encabezado:
-   ───────────────────────
-   📋 DÍA N — TIPO (Día de la semana)
-   ───────────────────────
-2. Usar los días de entrenamiento del perfil del usuario.
-3. Envolver TODO el texto de la rutina en los marcadores exactos:
-   {routine_start}
-   [texto completo de la rutina con todos los días]
-   {routine_end}
-4. Antes y después de los marcadores puedes escribir texto normal.
-
-════════════════════════════════════
-ALCANCE DEL BOT — SOLO ENTRENAMIENTO
-════════════════════════════════════
-Eres un entrenador personal. Tu rol está ESTRICTAMENTE limitado a:
-  ✅ Entrenamiento de fuerza, hipertrofia, resistencia y movilidad
-  ✅ Programación de rutinas y progresión de cargas
-  ✅ Técnica de ejercicios y prevención de lesiones
-  ✅ Recuperación, sueño y adherencia al entrenamiento
-  ✅ Nutrición básica ligada al rendimiento deportivo
-
-Para CUALQUIER pregunta fuera de este alcance (programación, recetas, chistes,
-trivia, redacción, tecnología, preguntas generales de conocimiento, etc.):
-  → Responde ÚNICAMENTE: "Solo puedo ayudarte con tu entrenamiento 💪
-    ¿Querés revisar tu rutina, registrar una sesión o ajustar algo?"
-  → NO respondas la pregunta aunque la conozcas.
-
-════════════════════════════════════
-EQUIPAMIENTO — VALIDACIÓN Y REGLA ESTRICTA
-════════════════════════════════════
-PASO 1 — VALIDAR que el equipamiento del perfil sea implemento de ejercicio real.
-
-Implementos VÁLIDOS (ejemplos, no exhaustivo):
-  • Pesos libres: mancuernas, kettlebells, barras, discos, sacos de arena/sal
-  • Estructura: rack, jaula, banco plano/inclinado/ajustable, paralelas, barra dominadas
-  • Resistencia: bandas elásticas, TRX / anillas de gimnasia
-  • Funcional: balón medicinal, caja pliométrica, cuerda de combate
-  • Máquinas: polea, leg press, Smith, etc.
-  • Peso corporal puro (sin implemento)
-
-Implementos INVÁLIDOS — objetos que NO son equipamiento de ejercicio:
-  • Animales (perros, chanchos, gatos, caballos, cualquier animal)
-  • Muebles del hogar (sillas, mesas, mochilas con libros, baldes de agua)
-  • Personas, vehículos, alimentos u otros objetos no deportivos
-
-Si el equipamiento del perfil contiene ítems inválidos o absurdos:
-  1. NO generes rutina con ese equipamiento.
-  2. Informa con amabilidad: explica que ese ítem no es un implemento de ejercicio.
-  3. Pregunta qué implementos reales tiene disponibles.
-  4. Usa update_equipment SOLO si el usuario confirma ítems válidos.
-
-PASO 2 — Una vez validado, la lista es EXHAUSTIVA y EXCLUYENTE:
-  ✅ SOLO puedes usar los implementos listados.
-  ❌ Si un ejercicio requiere algo que NO está en la lista → está PROHIBIDO.
-
-Nunca disponibles salvo que se listen explícitamente:
-- Banco de press / banco ajustable
-- Rack o jaula de sentadillas
-- Máquinas de gimnasio (polea, press guiado, leg press, etc.)
-- Caja pliométrica / Smith machine
-
-════════════════════════════════════
-PRINCIPIOS IRRENUNCIABLES
-════════════════════════════════════
-• Seguridad primero: si el usuario reporta dolor, adapta o sustituye.
-• Nunca ignores las lesiones o limitaciones del perfil.
-• Técnica antes que carga: corrige la forma antes de aumentar el peso.
-• Sé honesto si no tienes suficiente información para recomendar.
-"""
-
 
 _DAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
@@ -395,8 +126,16 @@ def _annotate_routine_with_weights(routine_text: str, user_id: str) -> str:
                 indent = line[: len(line) - len(line.lstrip())]
                 target = _store.get_progression_target(user_id, name)
                 if target is not None:
-                    reps_part = f", {target['next_reps']} reps" if target.get("next_reps") else ""
-                    sets_part = f", {target['next_sets']} series" if target.get("next_sets") else ""
+                    reps_part = (
+                        f", {target['next_reps']} reps"
+                        if target.get("next_reps")
+                        else ""
+                    )
+                    sets_part = (
+                        f", {target['next_sets']} series"
+                        if target.get("next_sets")
+                        else ""
+                    )
                     annotated_lines.append(
                         f"{indent}{stripped}  → progresión calculada: {target['next_weight']} kg{reps_part}{sets_part}"
                         + (f" ({target['basis']})" if target.get("basis") else "")
@@ -404,7 +143,9 @@ def _annotate_routine_with_weights(routine_text: str, user_id: str) -> str:
                     continue
                 weight = _store.get_last_weight_for_exercise(user_id, name)
                 if weight is not None:
-                    annotated_lines.append(f"{indent}{stripped}  → peso sugerido: {weight} kg")
+                    annotated_lines.append(
+                        f"{indent}{stripped}  → peso sugerido: {weight} kg"
+                    )
                     continue
         annotated_lines.append(line)
     return "\n".join(annotated_lines)
@@ -440,22 +181,26 @@ def apply_progression_to_routine_text(routine_text: str, user_id: str) -> str:
                     next_sets = target.get("next_sets")
                     next_reps = target.get("next_reps")
                     if next_sets or next_reps:
+
                         def _replace_setsreps(m: re.Match) -> str:
                             sets = str(next_sets) if next_sets else m.group(1)
                             reps = next_reps if next_reps else m.group(2)
                             # Si next_reps trae unidad ("40-45 seg") y la línea
                             # original ya la tiene después del match ("3x40 seg"),
                             # quitarla del reemplazo para no duplicar "seg seg".
-                            following = m.string[m.end():].lstrip()
+                            following = m.string[m.end() :].lstrip()
                             if " " in reps:
                                 unit = reps.rsplit(" ", 1)[1]
                                 if following.lower().startswith(unit.lower()):
                                     reps = reps.rsplit(" ", 1)[0]
                             return f"{sets}x{reps}"
+
                         tail = _SETSREPS_RE.sub(_replace_setsreps, tail, count=1)
                     next_weight = target.get("next_weight")
                     if next_weight and _WEIGHT_RE.search(tail):
-                        tail = _WEIGHT_RE.sub(f"@ {_format_weight(next_weight)} kg", tail, count=1)
+                        tail = _WEIGHT_RE.sub(
+                            f"@ {_format_weight(next_weight)} kg", tail, count=1
+                        )
                     indent = line[: len(line) - len(line.lstrip())]
                     updated_lines.append(f"{indent}{bullet}{name}{tail}")
                     continue
@@ -527,11 +272,11 @@ def _build_context(user_id: str) -> dict:
     today_display = today.strftime("%d/%m/%Y")
     today_day = _DAYS_ES[today.weekday()]
 
-    training_days = [
-        d.strip()
-        for d in (user.get("training_days") or "").split(",")
-        if d.strip()
-    ] if user else []
+    training_days = (
+        [d.strip() for d in (user.get("training_days") or "").split(",") if d.strip()]
+        if user
+        else []
+    )
 
     is_training_day = today_day in training_days
     today_section = None
@@ -545,8 +290,12 @@ def _build_context(user_id: str) -> dict:
             session_today_text = f"SÍ — {today_day.capitalize()} es día de entrenamiento (sección no identificada en la rutina)."
     else:
         next_day = _next_training_day(today_day, training_days)
-        next_msg = f"Próximo entrenamiento: {next_day.capitalize()}." if next_day else ""
-        session_today_text = f"NO — {today_day.capitalize()} es día de descanso. {next_msg}"
+        next_msg = (
+            f"Próximo entrenamiento: {next_day.capitalize()}." if next_day else ""
+        )
+        session_today_text = (
+            f"NO — {today_day.capitalize()} es día de descanso. {next_msg}"
+        )
 
     # ── Overrides activos ────────────────────────────────────────────────
     if overrides:
@@ -564,7 +313,9 @@ def _build_context(user_id: str) -> dict:
     if not user or not user.get("onboarding_done"):
         profile_text = "Perfil incompleto — el usuario no terminó el onboarding."
     else:
-        if user["equipment"] == "casa con material" and user.get("home_equipment_detail"):
+        if user["equipment"] == "casa con material" and user.get(
+            "home_equipment_detail"
+        ):
             equipment_line = (
                 f"casa con material.\n"
                 f"  ⚠️  SOLO cuenta con: {user['home_equipment_detail']}"
@@ -572,7 +323,9 @@ def _build_context(user_id: str) -> dict:
         else:
             equipment_line = user.get("equipment", "no especificado")
 
-        days_label = user.get("training_days") or f"{user.get('days_per_week', '?')} días/semana"
+        days_label = (
+            user.get("training_days") or f"{user.get('days_per_week', '?')} días/semana"
+        )
 
         profile_text = (
             f"Nombre: {user['name']}\n"
@@ -589,7 +342,9 @@ def _build_context(user_id: str) -> dict:
     # ── Rutina general ───────────────────────────────────────────────────
     if routine:
         date = routine["created_at"][:10]
-        annotated_routine = _annotate_routine_with_weights(routine["routine_text"], user_id)
+        annotated_routine = _annotate_routine_with_weights(
+            routine["routine_text"], user_id
+        )
         routine_text = f"Guardada el {date}:\n\n{annotated_routine}"
     else:
         routine_text = "Sin rutina guardada. Cuando el usuario lo pida, genera una."
@@ -624,7 +379,9 @@ def _build_context(user_id: str) -> dict:
     if past:
         by_date: dict[str, dict[str, list]] = {}
         for w in reversed(past):  # orden cronológico para numerar S1, S2...
-            by_date.setdefault(w["local_date"], {}).setdefault(w["exercise"], []).append(w)
+            by_date.setdefault(w["local_date"], {}).setdefault(
+                w["exercise"], []
+            ).append(w)
         lines = []
         for date_str in sorted(by_date, reverse=True):
             lines.append(f"📅 {date_str}:")
@@ -647,6 +404,38 @@ def _build_context(user_id: str) -> dict:
     }
 
 
+def _latest_human_message(state: AgentState) -> str:
+    for message in reversed(state["messages"]):
+        if isinstance(message, HumanMessage):
+            return str(message.content)
+    return str(state["messages"][-1].content)
+
+
+def classify_intent_node(state: AgentState) -> dict:
+    intent = classify_intent_text(_latest_human_message(state))
+    return {"intent": intent}
+
+
+def direct_response_node(state: AgentState) -> dict:
+    context = _build_context(state["user_id"])
+    intent = state.get("intent", Intent.OUT_OF_SCOPE)
+    if intent == Intent.TODAY_PLAN:
+        response = AgentResponse(message=context["session_today"])
+    elif intent == Intent.HISTORY:
+        response = AgentResponse(message=context["recent_workouts"])
+    else:
+        response = AgentResponse(
+            message="Solo puedo ayudarte con tu entrenamiento. ¿Quieres revisar tu rutina, registrar una sesión o ajustar algo?"
+        )
+    return {"messages": [AIMessage(content=response.message)], "response": response}
+
+
+def route_after_intent(state: AgentState) -> str:
+    if state.get("intent") in {Intent.TODAY_PLAN, Intent.HISTORY, Intent.OUT_OF_SCOPE}:
+        return "direct_response"
+    return "agent"
+
+
 def agent_node(state: AgentState) -> dict:
     """
     Nodo principal: inyecta contexto completo y llama al LLM.
@@ -663,26 +452,18 @@ def agent_node(state: AgentState) -> dict:
     # Leer contexto de DB (Python puro, 0 costo LLM)
     context = _build_context(state["user_id"])
 
-    system_content = SYSTEM_PROMPT.format(
-        user_id=state["user_id"],
-        routine_start=ROUTINE_START,
-        routine_end=ROUTINE_END,
-        today=context["today"],
-        today_date=context["today_date"],
-        session_today=context["session_today"],
-        today_done=context["today_done"],
-        webapp_url=context["webapp_url"],
-        profile=context["profile"],
-        routine=context["routine"],
-        overrides=context["overrides"],
-        recent_workouts=context["recent_workouts"],
-    )
+    system_content = build_system_prompt(context)
     system = SystemMessage(content=system_content)
 
     # [CONCEPTO: Message History = "memoria" del LLM]
     # El LLM es stateless — la memoria se logra enviando TODOS los mensajes
     # previos en cada llamada. LangGraph gestiona esto con el checkpointer.
-    response = llm_with_tools.invoke([system] + list(state["messages"]))
+    allowed_tool_names = allowed_tools_for_intent(
+        state.get("intent", Intent.OUT_OF_SCOPE)
+    )
+    allowed_tools = [tool for tool in TOOLS if tool.name in allowed_tool_names]
+    runnable = llm.bind_tools(allowed_tools) if allowed_tools else llm
+    response = runnable.invoke([system] + list(state["messages"]))
 
     return {"messages": [response]}
 
@@ -691,7 +472,20 @@ def agent_node(state: AgentState) -> dict:
 # ToolNode lee los tool_calls del último mensaje, ejecuta cada función
 # y agrega los resultados como ToolMessages al estado.
 # Aprende más: https://langchain-ai.github.io/langgraph/reference/prebuilt/#toolnode
-tools_node = ToolNode(TOOLS)
+_tool_node = ToolNode(TOOLS)
+
+
+def tools_node(state: AgentState) -> dict:
+    token = current_agent_context.set(
+        AgentRuntimeContext(
+            user_id=state["user_id"],
+            channel=state.get("channel", "telegram"),
+        )
+    )
+    try:
+        return _tool_node.invoke(state)
+    finally:
+        current_agent_context.reset(token)
 
 
 def should_continue(state: AgentState) -> str:

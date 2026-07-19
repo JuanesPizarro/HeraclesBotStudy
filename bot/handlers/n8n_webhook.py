@@ -33,7 +33,8 @@ class ReminderPayload(BaseModel):
 
     Aprende más: https://docs.pydantic.dev/latest/concepts/models/
     """
-    message: str                          # Texto del recordatorio
+
+    message: str  # Texto del recordatorio
     user_ids: Optional[list[str]] = None  # None = enviar a TODOS los usuarios
 
 

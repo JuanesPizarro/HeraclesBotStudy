@@ -1,8 +1,15 @@
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 
+from bot.agent.checkpoints import build_checkpointer
 from bot.agent.state import AgentState
-from bot.agent.nodes import agent_node, tools_node, should_continue
+from bot.agent.nodes import (
+    agent_node,
+    classify_intent_node,
+    direct_response_node,
+    route_after_intent,
+    should_continue,
+    tools_node,
+)
 
 # =====================================================================
 # [CONCEPTO: StateGraph — El corazón de LangGraph]
@@ -51,12 +58,25 @@ def build_graph():
     graph_builder = StateGraph(AgentState)
 
     # 2. Agregar nodos (nombre → función)
+    graph_builder.add_node("classify_intent", classify_intent_node)
+    graph_builder.add_node("direct_response", direct_response_node)
     graph_builder.add_node("agent", agent_node)
     graph_builder.add_node("tools", tools_node)
 
     # 3. Definir las aristas del grafo
     # START siempre es el primer nodo
-    graph_builder.add_edge(START, "agent")
+    graph_builder.add_edge(START, "classify_intent")
+
+    graph_builder.add_conditional_edges(
+        source="classify_intent",
+        path=route_after_intent,
+        path_map={
+            "direct_response": "direct_response",
+            "agent": "agent",
+        },
+    )
+
+    graph_builder.add_edge("direct_response", END)
 
     # Arista condicional desde "agent":
     # should_continue() decide si ir a "tools" o a END
@@ -65,7 +85,7 @@ def build_graph():
         path=should_continue,
         path_map={
             "tools": "tools",  # Si should_continue devuelve "tools" → nodo tools
-            "end": END,        # Si should_continue devuelve "end" → terminar
+            "end": END,  # Si should_continue devuelve "end" → terminar
         },
     )
 
@@ -92,7 +112,7 @@ def build_graph():
     #
     # Aprende más: https://langchain-ai.github.io/langgraph/concepts/persistence/
     # =====================================================================
-    checkpointer = MemorySaver()
+    checkpointer = build_checkpointer()
 
     # 4. Compilar el grafo — lo convierte en un Runnable invocable
     # [CONCEPTO: Runnable Interface]

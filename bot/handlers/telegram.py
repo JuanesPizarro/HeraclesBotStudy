@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -7,13 +7,18 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from langchain_core.messages import HumanMessage
-
-from bot.agent.graph import agent_graph
+from bot.agent.intent import allowed_tools_for_intent, classify_intent_text
 from bot.agent.nodes import ROUTINE_START, ROUTINE_END
 from bot.storage.user_store import UserStore
 from bot.config import settings
 from bot.handlers.onboarding import build_onboarding_handler
+from bot.observability import (
+    anonymize_user_id,
+    log_event,
+    new_request_id,
+    request_id_var,
+)
+from bot.services.agent_service import run_agent_message
 
 # =====================================================================
 # [CONCEPTO: Deep links y URLs personalizadas]
@@ -73,16 +78,20 @@ def _extract_and_save_routine(user_id: str, response_text: str) -> str:
         start_idx = response_text.index(ROUTINE_START)
         end_idx = response_text.index(ROUTINE_END)
 
-        routine_text = response_text[start_idx + len(ROUTINE_START):end_idx].strip()
+        routine_text = response_text[start_idx + len(ROUTINE_START) : end_idx].strip()
 
-        # Guardar en DB (Python puro, 0 costo LLM)
-        _store.save_routine(user_id, routine_text)
+        # Guardar como borrador: pedir o recibir una rutina no reemplaza la activa.
+        draft_id = _store.create_routine_draft(user_id, routine_text)
 
         # Devolver texto limpio: lo que va antes + la rutina + lo que va después
         before = response_text[:start_idx].strip()
-        after = response_text[end_idx + len(ROUTINE_END):].strip()
+        after = response_text[end_idx + len(ROUTINE_END) :].strip()
 
-        parts = [p for p in [before, routine_text, after] if p]
+        confirmation_note = (
+            f"Borrador de rutina creado con ID {draft_id}. "
+            "Confírmalo desde la app antes de reemplazar tu rutina activa."
+        )
+        parts = [p for p in [before, routine_text, confirmation_note, after] if p]
         return "\n\n".join(parts)
 
     except ValueError:
@@ -94,7 +103,9 @@ def _is_admin(user_id: str) -> bool:
     return bool(settings.ADMIN_TELEGRAM_ID) and user_id == settings.ADMIN_TELEGRAM_ID
 
 
-async def handle_access_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_access_decision(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """
     Callback para los botones ✅ Aprobar / ❌ Bloquear que recibe el admin.
 
@@ -110,18 +121,16 @@ async def handle_access_decision(update: Update, context: ContextTypes.DEFAULT_T
         return  # Solo el admin puede usar estos botones
 
     # callback_data: "access_approve_123456" o "access_block_123456"
-    parts = query.data.split("_")   # ["access", "approve/block", "userid"]
-    action = parts[1]               # "approve" o "block"
-    target_id = parts[2]            # telegram_id del usuario
+    parts = query.data.split("_")  # ["access", "approve/block", "userid"]
+    action = parts[1]  # "approve" o "block"
+    target_id = parts[2]  # telegram_id del usuario
 
     db_user = _store.get_user(target_id)
     name = db_user["name"] if db_user else target_id
 
     if action == "approve":
         _store.update_user_status(target_id, "active")
-        await query.edit_message_text(
-            f"✅ *{name}* aprobado.", parse_mode="Markdown"
-        )
+        await query.edit_message_text(f"✅ *{name}* aprobado.", parse_mode="Markdown")
         await context.bot.send_message(
             chat_id=target_id,
             text=(
@@ -132,9 +141,7 @@ async def handle_access_decision(update: Update, context: ContextTypes.DEFAULT_T
         )
     elif action == "block":
         _store.update_user_status(target_id, "blocked")
-        await query.edit_message_text(
-            f"❌ *{name}* bloqueado.", parse_mode="Markdown"
-        )
+        await query.edit_message_text(f"❌ *{name}* bloqueado.", parse_mode="Markdown")
         await context.bot.send_message(
             chat_id=target_id,
             text="❌ Tu solicitud de acceso fue denegada.",
@@ -204,9 +211,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/ayuda — Ver este menú\n\n"
         "_O simplemente escríbeme en lenguaje natural._\n\n"
         "Ejemplos:\n"
-        "• \"Hoy hice sentadilla 4x8 con 100kg\"\n"
-        "• \"¿Cuándo debería subir el peso?\"\n"
-        "• \"Genérame mi rutina semanal\""
+        '• "Hoy hice sentadilla 4x8 con 100kg"\n'
+        '• "¿Cuándo debería subir el peso?"\n'
+        '• "Genérame mi rutina semanal"'
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -229,7 +236,7 @@ async def rutina_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not routine:
         await update.message.reply_text(
             "No tienes ninguna rutina guardada todavía.\n\n"
-            "Escríbeme *\"Genérame mi rutina\"* para que diseñe una personalizada. 💪",
+            'Escríbeme *"Genérame mi rutina"* para que diseñe una personalizada. 💪',
             parse_mode="Markdown",
         )
         return
@@ -287,7 +294,9 @@ async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
-async def handle_stale_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_stale_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """
     Captura callbacks de teclados que ya no tienen estado activo (ej. tras reinicio).
 
@@ -310,6 +319,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """
     user = update.effective_user
     user_id = str(user.id)
+    request_token = request_id_var.set(new_request_id())
+    try:
+        detected_intent = classify_intent_text(update.message.text)
+        log_event(
+            "telegram_message_received",
+            user_id=anonymize_user_id(user_id),
+            intent=detected_intent.value,
+            allowed_tools=allowed_tools_for_intent(detected_intent),
+        )
+    finally:
+        request_id_var.reset(request_token)
 
     _store.upsert_user(user_id, user.first_name)
 
@@ -344,23 +364,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         action="typing",
     )
 
-    # =====================================================================
-    # [CONCEPTO: thread_id para memoria por usuario]
-    # El checkpointer de LangGraph guarda el historial de conversación
-    # identificado por thread_id. Usamos el user_id de Telegram para que
-    # cada usuario tenga su propio historial independiente.
-    # =====================================================================
-    config = {"configurable": {"thread_id": user_id}}
-
-    result = await agent_graph.ainvoke(
-        input={
-            "messages": [HumanMessage(content=update.message.text)],
-            "user_id": user_id,
-        },
-        config=config,
-    )
-
-    response_text = result["messages"][-1].content
+    response = await run_agent_message(user_id, update.message.text, "telegram")
+    response_text = response.message
 
     # [CONCEPTO: Post-processing sin LLM]
     # Después de que el agente responde, el código detecta si hay una rutina
@@ -390,9 +395,11 @@ def create_telegram_app() -> Application:
     # PTB evalúa handlers en orden de registro. Los callbacks de acceso
     # van PRIMERO para que el admin pueda aprobar/bloquear en cualquier
     # momento, sin que el ConversationHandler los intercepte.
-    app.add_handler(CallbackQueryHandler(
-        handle_access_decision, pattern=r"^access_(approve|block)_\d+$"
-    ))
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_access_decision, pattern=r"^access_(approve|block)_\d+$"
+        )
+    )
 
     # Onboarding — intercepta /start y el flujo de preguntas
     app.add_handler(build_onboarding_handler())
@@ -408,9 +415,7 @@ def create_telegram_app() -> Application:
     # filters.TEXT & ~filters.COMMAND:
     #   - filters.TEXT: solo mensajes de texto (no fotos, archivos, etc.)
     #   - ~filters.COMMAND: excluir mensajes que empiecen con /
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Fallback para callbacks no capturados (ej. teclados de una sesión anterior
     # tras un reinicio del contenedor que borró el estado en memoria).

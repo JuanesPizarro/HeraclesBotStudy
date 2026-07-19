@@ -68,16 +68,14 @@ class _NeedsOnboardingFilter(filters.MessageFilter):
     Aquí lo usamos para que el ConversationHandler intercepte mensajes de
     usuarios que no terminaron su perfil, sin afectar a los que sí lo hicieron.
     """
+
     def filter(self, message) -> bool:
         if not message.from_user:
             return False
         user = _store.get_user(str(message.from_user.id))
         if not user:
             return False
-        return (
-            user.get("status") == "active"
-            and not bool(user.get("onboarding_done"))
-        )
+        return user.get("status") == "active" and not bool(user.get("onboarding_done"))
 
 
 _needs_onboarding = _NeedsOnboardingFilter()
@@ -96,22 +94,25 @@ async def _notify_admin_new_user(
     """
     if not settings.ADMIN_TELEGRAM_ID:
         return
-    keyboard = InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("✅ Aprobar", callback_data=f"access_approve_{user_id}"),
-            InlineKeyboardButton("❌ Bloquear", callback_data=f"access_block_{user_id}"),
+            [
+                InlineKeyboardButton(
+                    "✅ Aprobar", callback_data=f"access_approve_{user_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ Bloquear", callback_data=f"access_block_{user_id}"
+                ),
+            ]
         ]
-    ])
+    )
     await context.bot.send_message(
         chat_id=settings.ADMIN_TELEGRAM_ID,
-        text=(
-            "⚠️ *Nueva solicitud de acceso*\n\n"
-            f"👤 {user_name}\n"
-            f"🆔 `{user_id}`"
-        ),
+        text=(f"⚠️ *Nueva solicitud de acceso*\n\n👤 {user_name}\n🆔 `{user_id}`"),
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
+
 
 # Estados — un entero por paso.
 # [CONCEPTO: range() para constantes secuenciales]
@@ -168,12 +169,16 @@ def _build_days_keyboard(selected: set[str]) -> InlineKeyboardMarkup:
     pairs = list(DAYS_CALLBACK.items())
     for i in range(0, len(pairs), 2):
         row = []
-        for cb, name in pairs[i:i + 2]:
+        for cb, name in pairs[i : i + 2]:
             label = f"✅ {name.capitalize()}" if name in selected else name.capitalize()
             row.append(InlineKeyboardButton(label, callback_data=cb))
         rows.append(row)
     count = len(selected)
-    confirm_label = f"Confirmar ({count} día{'s' if count != 1 else ''})" if count else "Selecciona al menos 2 días"
+    confirm_label = (
+        f"Confirmar ({count} día{'s' if count != 1 else ''})"
+        if count
+        else "Selecciona al menos 2 días"
+    )
     rows.append([InlineKeyboardButton(confirm_label, callback_data="days_confirm")])
     return InlineKeyboardMarkup(rows)
 
@@ -190,72 +195,125 @@ SESSION_TIME_LABELS: dict[str, str] = {
 }
 
 EQUIPMENT_MAP: dict[str, str] = {
-    "equip_gym":      "gym completo",
-    "equip_casa":     "casa con material",
+    "equip_gym": "gym completo",
+    "equip_casa": "casa con material",
     "equip_corporal": "peso corporal / calistenia",
 }
 
 EXPERIENCE_MAP: dict[str, str] = {
     "exp_principiante": "principiante",
-    "exp_intermedio":   "intermedio",
-    "exp_avanzado":     "avanzado",
+    "exp_intermedio": "intermedio",
+    "exp_avanzado": "avanzado",
 }
 
 ACTIVITY_MAP: dict[str, str] = {
     "act_sedentario": "sedentario (escritorio, poco movimiento)",
-    "act_moderado":   "moderadamente activo (de pie parte del día)",
-    "act_activo":     "muy activo (trabajo físico, mucho movimiento)",
+    "act_moderado": "moderadamente activo (de pie parte del día)",
+    "act_activo": "muy activo (trabajo físico, mucho movimiento)",
 }
 
 GOAL_MAP: dict[str, str] = {
     "goal_hipertrofia": "ganar masa muscular (hipertrofia)",
-    "goal_grasa":       "perder grasa corporal",
-    "goal_fuerza":      "ganar fuerza pura",
-    "goal_salud":       "mejorar salud, condición física y movilidad",
+    "goal_grasa": "perder grasa corporal",
+    "goal_fuerza": "ganar fuerza pura",
+    "goal_salud": "mejorar salud, condición física y movilidad",
 }
 
 # ── Teclados inline ───────────────────────────────────────────────────
 
-SESSION_TIME_KEYBOARD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("⚡ 30 minutos (express)",   callback_data="time_30")],
-    [InlineKeyboardButton("🕐 1 hora",                 callback_data="time_60")],
-    [InlineKeyboardButton("🕑 1 hora 30 min o más",    callback_data="time_90")],
-])
+SESSION_TIME_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("⚡ 30 minutos (express)", callback_data="time_30")],
+        [InlineKeyboardButton("🕐 1 hora", callback_data="time_60")],
+        [InlineKeyboardButton("🕑 1 hora 30 min o más", callback_data="time_90")],
+    ]
+)
 
-EQUIPMENT_KEYBOARD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🏋️ Gimnasio completo",           callback_data="equip_gym")],
-    [InlineKeyboardButton("🏠 En casa con material",         callback_data="equip_casa")],
-    [InlineKeyboardButton("🤸 Peso corporal / Calistenia",   callback_data="equip_corporal")],
-])
+EQUIPMENT_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("🏋️ Gimnasio completo", callback_data="equip_gym")],
+        [InlineKeyboardButton("🏠 En casa con material", callback_data="equip_casa")],
+        [
+            InlineKeyboardButton(
+                "🤸 Peso corporal / Calistenia", callback_data="equip_corporal"
+            )
+        ],
+    ]
+)
 
-EXPERIENCE_KEYBOARD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🌱 Principiante  (menos de 1 año)", callback_data="exp_principiante")],
-    [InlineKeyboardButton("📈 Intermedio  (1 a 3 años)",        callback_data="exp_intermedio")],
-    [InlineKeyboardButton("🏆 Avanzado  (más de 3 años)",       callback_data="exp_avanzado")],
-])
+EXPERIENCE_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton(
+                "🌱 Principiante  (menos de 1 año)", callback_data="exp_principiante"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📈 Intermedio  (1 a 3 años)", callback_data="exp_intermedio"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🏆 Avanzado  (más de 3 años)", callback_data="exp_avanzado"
+            )
+        ],
+    ]
+)
 
-ACTIVITY_KEYBOARD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("💻 Sedentario (escritorio)",       callback_data="act_sedentario")],
-    [InlineKeyboardButton("🚶 Moderadamente activo",          callback_data="act_moderado")],
-    [InlineKeyboardButton("⚒️ Muy activo (trabajo físico)",   callback_data="act_activo")],
-])
+ACTIVITY_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton(
+                "💻 Sedentario (escritorio)", callback_data="act_sedentario"
+            )
+        ],
+        [InlineKeyboardButton("🚶 Moderadamente activo", callback_data="act_moderado")],
+        [
+            InlineKeyboardButton(
+                "⚒️ Muy activo (trabajo físico)", callback_data="act_activo"
+            )
+        ],
+    ]
+)
 
-GOAL_KEYBOARD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("💪 Ganar masa muscular (hipertrofia)", callback_data="goal_hipertrofia")],
-    [InlineKeyboardButton("🔥 Perder grasa corporal",             callback_data="goal_grasa")],
-    [InlineKeyboardButton("🏋️ Ganar fuerza pura",                callback_data="goal_fuerza")],
-    [InlineKeyboardButton("🌿 Mejorar salud y movilidad",         callback_data="goal_salud")],
-])
+GOAL_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton(
+                "💪 Ganar masa muscular (hipertrofia)", callback_data="goal_hipertrofia"
+            )
+        ],
+        [InlineKeyboardButton("🔥 Perder grasa corporal", callback_data="goal_grasa")],
+        [InlineKeyboardButton("🏋️ Ganar fuerza pura", callback_data="goal_fuerza")],
+        [
+            InlineKeyboardButton(
+                "🌿 Mejorar salud y movilidad", callback_data="goal_salud"
+            )
+        ],
+    ]
+)
 
-LEVEL_TEST_KEYBOARD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("✅ Sí, asígname una prueba de nivel", callback_data="test_si")],
-    [InlineKeyboardButton("🚀 No, empecemos directamente",       callback_data="test_no")],
-])
+LEVEL_TEST_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton(
+                "✅ Sí, asígname una prueba de nivel", callback_data="test_si"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🚀 No, empecemos directamente", callback_data="test_no"
+            )
+        ],
+    ]
+)
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Entrada — /start
 # ─────────────────────────────────────────────────────────────────────
+
 
 async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -269,7 +327,11 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """
     user = update.effective_user
     user_id = str(user.id)
-    logger.warning("DEBUG start_onboarding: user=%s via=%s", user_id, type(update.effective_message).__name__)
+    logger.warning(
+        "DEBUG start_onboarding: user=%s via=%s",
+        user_id,
+        type(update.effective_message).__name__,
+    )
     is_new = _store.upsert_user(user_id, user.first_name)
 
     # El admin se auto-aprueba siempre
@@ -332,6 +394,7 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # Sección 1 — Logística
 # ─────────────────────────────────────────────────────────────────────
 
+
 async def toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Alterna la selección de un día. Reconstruye el teclado con el nuevo estado.
@@ -342,7 +405,11 @@ async def toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     edit_message_reply_markup solo actualiza los botones. Más eficiente
     y preserva el texto original.
     """
-    logger.warning("DEBUG toggle_day: data=%s user=%s", update.callback_query.data, update.effective_user.id)
+    logger.warning(
+        "DEBUG toggle_day: data=%s user=%s",
+        update.callback_query.data,
+        update.effective_user.id,
+    )
     query = update.callback_query
     await query.answer()
 
@@ -388,7 +455,9 @@ async def confirm_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ASK_SESSION_TIME
 
 
-async def received_session_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def received_session_time(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     query = update.callback_query
     await query.answer()
 
@@ -451,7 +520,9 @@ async def received_equipment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return await _ask_experience(update.effective_chat.id, context)
 
 
-async def received_home_equipment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def received_home_equipment(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Guarda el detalle del material en casa y continúa con la Sección 2."""
     context.user_data["home_equipment_detail"] = update.message.text.strip()
     await update.message.reply_text("🏠  Material registrado ✅")
@@ -478,7 +549,10 @@ async def _ask_experience(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> i
 # Sección 2 — Perfil
 # ─────────────────────────────────────────────────────────────────────
 
-async def received_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+
+async def received_experience(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     query = update.callback_query
     await query.answer()
 
@@ -501,7 +575,9 @@ async def received_experience(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ASK_DAILY_ACTIVITY
 
 
-async def received_daily_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def received_daily_activity(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     query = update.callback_query
     await query.answer()
 
@@ -526,7 +602,9 @@ async def received_daily_activity(update: Update, context: ContextTypes.DEFAULT_
     return ASK_LIMITATIONS
 
 
-async def received_limitations(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def received_limitations(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     context.user_data["limitations"] = update.message.text.strip()
 
     await update.message.reply_text(
@@ -544,6 +622,7 @@ async def received_limitations(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─────────────────────────────────────────────────────────────────────
 # Sección 3 — Objetivo
 # ─────────────────────────────────────────────────────────────────────
+
 
 async def received_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -577,7 +656,10 @@ async def received_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # Sección 4 — Prueba de nivel y cierre
 # ─────────────────────────────────────────────────────────────────────
 
-async def received_level_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+
+async def received_level_test(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Persiste el perfil completo en un solo UPDATE atómico y cierra el flujo."""
     query = update.callback_query
     await query.answer()
@@ -616,7 +698,7 @@ async def received_level_test(update: Update, context: ContextTypes.DEFAULT_TYPE
         text=(
             "✅ *¡Perfil completo!*\n\n"
             f"{nivel_test_texto}\n\n"
-            "Escríbeme *\"Genérame mi rutina\"* cuando quieras empezar, "
+            'Escríbeme *"Genérame mi rutina"* cuando quieras empezar, '
             "o cuéntame tu entrenamiento de hoy 🏋️"
         ),
         parse_mode="Markdown",
@@ -628,7 +710,10 @@ async def received_level_test(update: Update, context: ContextTypes.DEFAULT_TYPE
 # Fallback — input fuera del flujo durante el onboarding
 # ─────────────────────────────────────────────────────────────────────
 
-async def onboarding_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+async def onboarding_fallback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """
     Rechaza cualquier mensaje que no sea la respuesta esperada en el paso actual.
     Aísla el flujo de onboarding del agente general hasta que el perfil esté completo.
@@ -643,6 +728,7 @@ async def onboarding_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─────────────────────────────────────────────────────────────────────
 # Factory — único símbolo público relevante para telegram.py
 # ─────────────────────────────────────────────────────────────────────
+
 
 def build_onboarding_handler() -> ConversationHandler:
     """
@@ -675,7 +761,9 @@ def build_onboarding_handler() -> ConversationHandler:
         ],
         states={
             ASK_DAYS: [
-                CallbackQueryHandler(toggle_day, pattern="^day_(?!s_)"),  # day_lun, day_mar... (no days_confirm)
+                CallbackQueryHandler(
+                    toggle_day, pattern="^day_(?!s_)"
+                ),  # day_lun, day_mar... (no days_confirm)
                 CallbackQueryHandler(confirm_days, pattern="^days_confirm$"),
             ],
             ASK_SESSION_TIME: [
@@ -685,7 +773,9 @@ def build_onboarding_handler() -> ConversationHandler:
                 CallbackQueryHandler(received_equipment, pattern="^equip_"),
             ],
             ASK_HOME_EQUIPMENT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, received_home_equipment),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, received_home_equipment
+                ),
             ],
             ASK_EXPERIENCE: [
                 CallbackQueryHandler(received_experience, pattern="^exp_"),
