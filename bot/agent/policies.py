@@ -6,7 +6,10 @@ TOOLS_BY_INTENT: dict[Intent, list[str]] = {
     Intent.ROUTINE: [],
     Intent.HISTORY: [],
     Intent.LOG_WORKOUT: ["save_workout"],
-    Intent.MODIFY_SESSION: ["create_session_override_draft"],
+    Intent.MODIFY_SESSION: [
+        "create_session_override_draft",
+        "confirm_session_override_draft",
+    ],
     Intent.CREATE_ROUTINE: [
         "create_routine_draft",
         "update_training_days",
@@ -18,7 +21,10 @@ TOOLS_BY_INTENT: dict[Intent, list[str]] = {
         "update_training_days",
         "update_training_schedule",
     ],
-    Intent.LIMITATION: ["create_session_override_draft"],
+    Intent.LIMITATION: [
+        "create_session_override_draft",
+        "confirm_session_override_draft",
+    ],
     Intent.OUT_OF_SCOPE: [],
 }
 

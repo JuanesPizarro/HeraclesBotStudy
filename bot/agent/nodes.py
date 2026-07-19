@@ -450,12 +450,33 @@ def _previous_ai_requested_routine_confirmation(state: AgentState) -> bool:
     return False
 
 
+def _previous_ai_requested_session_override_confirmation(state: AgentState) -> bool:
+    for message in reversed(state["messages"]):
+        if isinstance(message, AIMessage):
+            content = str(message.content).lower()
+            return (
+                "confirm" in content
+                and (
+                    "borrador de modificación" in content
+                    or "borrador de modificacion" in content
+                    or "modificación temporal" in content
+                    or "modificacion temporal" in content
+                    or "create_session_override_draft" in content
+                    or "confirm_session_override_draft" in content
+                )
+            )
+    return False
+
+
 def classify_intent_node(state: AgentState) -> dict:
     latest = _latest_human_message(state)
-    if _is_short_confirmation(latest) and _previous_ai_requested_routine_confirmation(
-        state
-    ):
-        intent = Intent.CREATE_ROUTINE
+    if _is_short_confirmation(latest):
+        if _previous_ai_requested_session_override_confirmation(state):
+            intent = Intent.MODIFY_SESSION
+        elif _previous_ai_requested_routine_confirmation(state):
+            intent = Intent.CREATE_ROUTINE
+        else:
+            intent = classify_intent_text(latest)
     else:
         intent = classify_intent_text(latest)
     return {"intent": intent}

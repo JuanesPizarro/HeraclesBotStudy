@@ -132,6 +132,44 @@ def test_update_training_schedule_rejects_exercise_changes(monkeypatch, store):
         current_agent_context.reset(token)
 
 
+def test_confirm_session_override_draft_uses_runtime_user_context(monkeypatch, store):
+    store.upsert_user("user-a", "A")
+    store.upsert_user("user-b", "B")
+    draft_a = store.create_session_override_draft(
+        "user-a",
+        target_date="2026-07-20",
+        scope="day",
+        modification="• Movilidad de cadera: 2x10",
+        reason="molestia puntual",
+    )
+    draft_b = store.create_session_override_draft(
+        "user-b",
+        target_date="2026-07-20",
+        scope="day",
+        modification="• Caminata suave: 1x20 min",
+        reason="fatiga",
+    )
+    monkeypatch.setattr(tools, "_store", store)
+
+    token = current_agent_context.set(
+        AgentRuntimeContext(user_id="user-a", channel="telegram")
+    )
+    try:
+        result = tools.confirm_session_override_draft.invoke({"override_id": draft_a})
+    finally:
+        current_agent_context.reset(token)
+
+    assert f"Modificación temporal {draft_a} confirmada" in result
+    with store._get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, user_id, status FROM session_overrides ORDER BY id"
+        ).fetchall()
+    assert [dict(row) for row in rows] == [
+        {"id": draft_a, "user_id": "user-a", "status": "active"},
+        {"id": draft_b, "user_id": "user-b", "status": "draft"},
+    ]
+
+
 def test_tool_without_runtime_context_fails_before_writing(monkeypatch, store):
     store.upsert_user("user-a", "A")
     monkeypatch.setattr(tools, "_store", store)

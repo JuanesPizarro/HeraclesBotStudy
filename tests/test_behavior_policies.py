@@ -1,8 +1,11 @@
 from datetime import date
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 import bot.handlers.web_api as web_api
 from bot.agent.contracts import Intent
 from bot.agent.intent import classify_intent_text
+from bot.agent.nodes import classify_intent_node
 from bot.agent.policies import allowed_tools_for_intent
 
 
@@ -12,7 +15,8 @@ def test_tool_permissions_match_policy_table():
     assert allowed_tools_for_intent(Intent.HISTORY) == []
     assert allowed_tools_for_intent(Intent.LOG_WORKOUT) == ["save_workout"]
     assert allowed_tools_for_intent(Intent.MODIFY_SESSION) == [
-        "create_session_override_draft"
+        "create_session_override_draft",
+        "confirm_session_override_draft",
     ]
     assert allowed_tools_for_intent(Intent.CREATE_ROUTINE) == [
         "create_routine_draft",
@@ -26,7 +30,8 @@ def test_tool_permissions_match_policy_table():
         "update_training_schedule",
     ]
     assert allowed_tools_for_intent(Intent.LIMITATION) == [
-        "create_session_override_draft"
+        "create_session_override_draft",
+        "confirm_session_override_draft",
     ]
     assert allowed_tools_for_intent(Intent.OUT_OF_SCOPE) == []
 
@@ -36,6 +41,23 @@ def test_pain_reports_are_limitation_intent():
         classify_intent_text("Me duele la rodilla al hacer sentadillas")
         == Intent.LIMITATION
     )
+
+
+def test_short_confirmation_after_session_override_draft_is_modify_session():
+    state = {
+        "user_id": "user-1",
+        "messages": [
+            AIMessage(
+                content=(
+                    "Borrador de modificación creado para 2026-07-20. "
+                    "ID: 7. Requiere confirmación."
+                )
+            ),
+            HumanMessage(content="sí"),
+        ],
+    }
+
+    assert classify_intent_node(state)["intent"] == Intent.MODIFY_SESSION
 
 
 def test_session_override_draft_does_not_affect_active_overrides(store, active_user):

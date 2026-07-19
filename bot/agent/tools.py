@@ -257,6 +257,22 @@ def create_session_override_draft(
     )
 
 
+@tool
+def confirm_session_override_draft(override_id: int) -> str:
+    """
+    Activa un borrador de modificación temporal de sesión ya propuesto.
+
+    Úsala cuando el usuario confirme explícitamente un borrador de cambio
+    temporal, por ejemplo: "sí", "confirmo", "aplica eso" o "hazlo".
+
+    Args:
+        override_id: ID del borrador de modificación temporal a activar.
+    """
+    user_id = require_agent_context().user_id
+    _store.confirm_session_override_draft(user_id, override_id)
+    return f"Modificación temporal {override_id} confirmada y activa."
+
+
 # [CONCEPTO: Lista de tools mínima]
 # Tools de escritura. Las lecturas (perfil, rutina, historial,
 # overrides activos) se inyectan en el system prompt sin costo extra.
@@ -266,5 +282,6 @@ TOOLS = [
     update_training_days,
     update_training_schedule,
     create_session_override_draft,
+    confirm_session_override_draft,
     create_routine_draft,
 ]
