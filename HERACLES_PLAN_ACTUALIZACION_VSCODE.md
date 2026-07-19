@@ -895,6 +895,8 @@ Reglas que deben implementarse como políticas del backend, no solo como prompt:
 - Una limitación puntual crea un borrador temporal, no altera inmediatamente la rutina permanente.
 - Las respuestas deben indicar límites cuando falta información relevante.
 - Cambios permanentes requieren confirmación.
+- Cambios de calendario confirmados que mantienen los mismos ejercicios se aplican
+  directamente; cambios de prescripción crean borrador de rutina.
 - Toda herramienta tiene un esquema de permisos por intención.
 
 Tabla inicial:
@@ -905,9 +907,9 @@ Tabla inicial:
 | `history` | Ninguna |
 | `log_workout` | `save_workout` |
 | `modify_session` | `create_session_override_draft` |
-| `create_routine` | `create_routine_draft` |
-| `evaluate_session` | Ninguna escritura LLM; usa motor determinista |
-| `update_profile` | `create_profile_change_draft` |
+| `create_routine` | `create_routine_draft`, `update_training_days`, `update_training_schedule` |
+| `evaluate_session` | Ninguna escritura LLM directa; agente propone y backend valida/fallback |
+| `update_profile` | `create_profile_change_draft`, `update_training_days`, `update_training_schedule` |
 | `limitation` | `create_session_override_draft` |
 | `out_of_scope` | Ninguna |
 

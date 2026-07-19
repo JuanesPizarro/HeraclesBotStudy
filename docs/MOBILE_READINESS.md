@@ -6,6 +6,7 @@ Current status:
 - Critical behavior has automated tests.
 - Progression is agent-proposed, backend-validated, and has a deterministic fallback.
 - Routines support structured drafts and explicit confirmation.
+- Calendar-only routine changes are applied directly after confirmation and do not create drafts.
 - Sessions have IDs, states, and idempotent finish behavior.
 - Agent responses have a neutral `AgentResponse` contract.
 - Prompt base is independent of Telegram formatting.
@@ -19,4 +20,6 @@ Remaining infrastructure work:
 - Run Alembic against real PostgreSQL with production credentials.
 - Exercise the Postgres checkpointer in a deployed environment.
 - Decide mobile authentication provider before replacing Telegram token flows.
+- Define the mobile API surface and versioned response contracts.
+- Add production-grade error reporting for Telegram/model/tool failures.
 - Add richer eval cases as prompt behavior changes.
