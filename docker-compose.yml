@@ -9,8 +9,6 @@
 #
 # Aprende más: https://docs.docker.com/compose/
 # =====================================================================
-version: "3.9"
-
 services:
   bot:
     build: .
@@ -33,14 +31,15 @@ services:
     # Similar a Zapier/Make pero self-hosted y gratuito
     image: docker.n8n.io/n8nio/n8n:latest
     ports:
-      - "5678:5678"  # Interfaz web de n8n en http://localhost:5678
+      - "127.0.0.1:5679:5678"  # Interfaz web de n8n via túnel SSH/local
     environment:
       # Autenticación básica para proteger la interfaz web
       - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=changeme123  # Cámbialo en producción
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme123}
       # Timezone para los cron jobs de recordatorios
-      - GENERIC_TIMEZONE=America/Bogota
+      - GENERIC_TIMEZONE=America/Santiago
+      - TZ=America/Santiago
     volumes:
       - n8n_data:/home/node/.n8n
     restart: unless-stopped

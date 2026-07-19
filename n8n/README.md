@@ -6,9 +6,15 @@ La usamos para enviar recordatorios programados al bot.
 ## Acceder a n8n
 
 Con Docker Compose corriendo:
-- URL: http://localhost:5678
-- Usuario: `admin`
-- Contraseña: `changeme123` (cámbiala en `docker-compose.yml`)
+- URL local en servidor: http://127.0.0.1:5679
+- Usuario: valor de `N8N_BASIC_AUTH_USER` o `admin`
+- Contraseña: valor de `N8N_BASIC_AUTH_PASSWORD`
+
+En producción no expongas n8n directamente a internet. Accede mediante túnel SSH:
+
+```bash
+ssh -L 5679:127.0.0.1:5679 heraclesapi
+```
 
 ## Crear el workflow de recordatorio diario
 
