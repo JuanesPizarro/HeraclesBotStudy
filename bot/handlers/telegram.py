@@ -1,4 +1,5 @@
 from telegram import Update
+from telegram.error import TelegramError, TimedOut
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -91,7 +92,14 @@ def _split_telegram_message(
 
 async def _reply_text(message, text: str, parse_mode: str | None = None) -> None:
     for chunk in _split_telegram_message(text):
-        await message.reply_text(chunk, parse_mode=parse_mode)
+        try:
+            await message.reply_text(chunk, parse_mode=parse_mode)
+        except TimedOut:
+            log_event("telegram_reply_timeout")
+            return
+        except TelegramError as exc:
+            log_event("telegram_reply_failed", error=exc.__class__.__name__)
+            return
 
 
 def _extract_and_save_routine(user_id: str, response_text: str) -> str:

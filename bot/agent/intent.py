@@ -63,8 +63,20 @@ def classify_intent_text(message: str) -> Intent:
             "crea una rutina",
             "hacer una rutina",
             "cambiar rutina",
+            "cambio de rutina",
+            "rutina general",
+            "cambio entero a la rutina",
+            "cambio de días",
+            "cambio de dias",
+            "cambiar días",
+            "cambiar dias",
+            "días de entrenamiento",
+            "dias de entrenamiento",
             "aplica esa rutina",
             "confirma esa rutina",
+            "confirmo esa rutina",
+            "confirmo el cambio",
+            "te confirmo el cambio",
         )
     ):
         return Intent.CREATE_ROUTINE

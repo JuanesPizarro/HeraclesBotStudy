@@ -33,6 +33,18 @@ from bot.storage.user_store import UserStore
 
 _store = UserStore()
 
+_DAY_ALIASES = {
+    "lunes": "lunes",
+    "martes": "martes",
+    "miercoles": "miércoles",
+    "miércoles": "miércoles",
+    "jueves": "jueves",
+    "viernes": "viernes",
+    "sabado": "sábado",
+    "sábado": "sábado",
+    "domingo": "domingo",
+}
+
 
 @tool
 def save_workout(exercise: str, sets: int, reps: int, weight_kg: float) -> str:
@@ -80,6 +92,43 @@ def create_profile_change_draft(field: str, new_value: str, reason: str = "") ->
     return (
         f"Borrador de cambio de perfil creado con ID {draft_id}. Requiere confirmación."
     )
+
+
+@tool
+def update_training_days(training_days: str, reason: str = "") -> str:
+    """
+    Actualiza directamente los días permanentes de entrenamiento ya confirmados.
+
+    Úsala SOLO cuando el usuario confirme explícitamente un cambio de calendario
+    o distribución semanal y los ejercicios de la rutina se mantienen. No crea
+    borrador porque no reemplaza la rutina activa.
+
+    NO la uses si el cambio altera ejercicios, series, repeticiones, pesos o la
+    estructura completa de la rutina; en ese caso usa create_routine_draft.
+
+    Args:
+        training_days: Días de entrenamiento separados por coma en español
+                       (ej: "domingo,lunes,miércoles,jueves,viernes").
+        reason: Motivo breve del cambio.
+    """
+    user_id = require_agent_context().user_id
+    normalized_days = []
+    for raw_day in training_days.split(","):
+        key = raw_day.strip().lower()
+        if not key:
+            continue
+        day = _DAY_ALIASES.get(key)
+        if not day:
+            raise ValueError(f"Unsupported training day: {raw_day}")
+        if day not in normalized_days:
+            normalized_days.append(day)
+    if not normalized_days:
+        raise ValueError("At least one training day is required")
+
+    normalized = ",".join(normalized_days)
+    _store.update_training_days(user_id, normalized)
+    suffix = f" Motivo: {reason}" if reason else ""
+    return f"Días de entrenamiento actualizados: {normalized}.{suffix}"
 
 
 @tool
@@ -151,11 +200,12 @@ def create_session_override_draft(
 
 
 # [CONCEPTO: Lista de tools mínima]
-# 6 tools — todos de escritura. Las lecturas (perfil, rutina, historial,
+# Tools de escritura. Las lecturas (perfil, rutina, historial,
 # overrides activos) se inyectan en el system prompt sin costo extra.
 TOOLS = [
     save_workout,
     create_profile_change_draft,
+    update_training_days,
     create_session_override_draft,
     create_routine_draft,
 ]

@@ -20,6 +20,25 @@ def test_current_routine_intent_exposes_no_write_tools():
     assert allowed_tools_for_intent(intent) == []
 
 
+def test_routine_change_confirmation_intent_allows_routine_draft_tool():
+    intent = classify_intent_text("te confirmo el cambio")
+
+    assert intent == Intent.CREATE_ROUTINE
+    assert allowed_tools_for_intent(intent) == [
+        "create_routine_draft",
+        "update_training_days",
+    ]
+
+
+def test_training_days_change_intent_allows_calendar_update_tool():
+    intent = classify_intent_text(
+        "haz un cambio entero a la rutina general: domingo upper, lunes lower"
+    )
+
+    assert intent == Intent.CREATE_ROUTINE
+    assert "update_training_days" in allowed_tools_for_intent(intent)
+
+
 def test_base_prompt_has_no_telegram_formatting_or_urls():
     base = "\n".join(load_prompt(name) for name in BASE_PROMPT_FILES).lower()
 

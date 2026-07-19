@@ -14,10 +14,14 @@ def test_tool_permissions_match_policy_table():
     assert allowed_tools_for_intent(Intent.MODIFY_SESSION) == [
         "create_session_override_draft"
     ]
-    assert allowed_tools_for_intent(Intent.CREATE_ROUTINE) == ["create_routine_draft"]
+    assert allowed_tools_for_intent(Intent.CREATE_ROUTINE) == [
+        "create_routine_draft",
+        "update_training_days",
+    ]
     assert allowed_tools_for_intent(Intent.EVALUATE_SESSION) == []
     assert allowed_tools_for_intent(Intent.UPDATE_PROFILE) == [
-        "create_profile_change_draft"
+        "create_profile_change_draft",
+        "update_training_days",
     ]
     assert allowed_tools_for_intent(Intent.LIMITATION) == [
         "create_session_override_draft"

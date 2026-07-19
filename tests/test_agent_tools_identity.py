@@ -45,6 +45,31 @@ def test_profile_change_draft_uses_runtime_user_context(monkeypatch, store):
     ]
 
 
+def test_update_training_days_uses_runtime_user_context(monkeypatch, store):
+    store.upsert_user("user-a", "A")
+    store.upsert_user("user-b", "B")
+    monkeypatch.setattr(tools, "_store", store)
+
+    token = current_agent_context.set(
+        AgentRuntimeContext(user_id="user-a", channel="telegram")
+    )
+    try:
+        result = tools.update_training_days.invoke(
+            {
+                "training_days": "domingo,lunes,miercoles,jueves,viernes",
+                "reason": "cambio confirmado",
+            }
+        )
+    finally:
+        current_agent_context.reset(token)
+
+    assert "domingo,lunes,miércoles,jueves,viernes" in result
+    assert store.get_user("user-a")["training_days"] == (
+        "domingo,lunes,miércoles,jueves,viernes"
+    )
+    assert store.get_user("user-b")["training_days"] is None
+
+
 def test_tool_without_runtime_context_fails_before_writing(monkeypatch, store):
     store.upsert_user("user-a", "A")
     monkeypatch.setattr(tools, "_store", store)
