@@ -55,6 +55,43 @@ from bot.services.agent_service import run_agent_message
 # =====================================================================
 
 _store = UserStore()
+TELEGRAM_MESSAGE_LIMIT = 4096
+TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
+
+
+def _split_telegram_message(
+    text: str, limit: int = TELEGRAM_SAFE_MESSAGE_LIMIT
+) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    min_soft_split = limit // 2
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n\n", 0, limit + 1)
+        if split_at < min_soft_split:
+            split_at = remaining.rfind("\n", 0, limit + 1)
+        if split_at < min_soft_split:
+            split_at = remaining.rfind(" ", 0, limit + 1)
+        if split_at < min_soft_split:
+            split_at = limit
+
+        chunk = remaining[:split_at].rstrip()
+        if not chunk:
+            chunk = remaining[:limit]
+            split_at = limit
+        chunks.append(chunk)
+        remaining = remaining[split_at:].lstrip()
+
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def _reply_text(message, text: str, parse_mode: str | None = None) -> None:
+    for chunk in _split_telegram_message(text):
+        await message.reply_text(chunk, parse_mode=parse_mode)
 
 
 def _extract_and_save_routine(user_id: str, response_text: str) -> str:
@@ -373,7 +410,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # enviar al usuario. Todo en Python puro — 0 llamadas extra al LLM.
     response_text = _extract_and_save_routine(user_id, response_text)
 
-    await update.message.reply_text(response_text, parse_mode="Markdown")
+    await _reply_text(update.message, response_text, parse_mode="Markdown")
 
 
 def create_telegram_app() -> Application:
