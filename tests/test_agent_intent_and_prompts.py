@@ -2,7 +2,12 @@ from langchain_core.messages import HumanMessage
 
 import bot.agent.nodes as nodes
 from bot.agent.contracts import Intent
-from bot.agent.intent import allowed_tools_for_intent, classify_intent_text
+from bot.agent.intent import (
+    IntentClassification,
+    allowed_tools_for_intent,
+    classify_intent,
+    classify_intent_text,
+)
 from bot.agent.prompts import BASE_PROMPT_FILES, build_system_prompt, load_prompt
 
 
@@ -39,6 +44,52 @@ def test_training_days_change_intent_allows_calendar_update_tool():
     assert intent == Intent.CREATE_ROUTINE
     assert "update_training_days" in allowed_tools_for_intent(intent)
     assert "update_training_schedule" in allowed_tools_for_intent(intent)
+
+
+def test_today_limited_equipment_intent_allows_session_override_tools():
+    intent = classify_intent_text("Solo tengo mancuernas para el entrenamiento de hoy")
+
+    assert intent == Intent.MODIFY_SESSION
+    assert allowed_tools_for_intent(intent) == [
+        "create_session_override_draft",
+        "confirm_session_override_draft",
+    ]
+
+
+def test_general_equipment_update_without_today_stays_profile_change():
+    intent = classify_intent_text("Tengo mancuernas y banco")
+
+    assert intent == Intent.UPDATE_PROFILE
+
+
+def test_hybrid_intent_uses_llm_for_ambiguous_session_change(monkeypatch):
+    monkeypatch.setattr(
+        "bot.agent.intent.classify_intent_with_llm",
+        lambda message: IntentClassification(
+            intent=Intent.MODIFY_SESSION,
+            confidence=0.91,
+            reason="limitación temporal de equipamiento",
+        ),
+    )
+
+    intent = classify_intent("Entreno en casa hoy, tengo unas pesas chicas nada más")
+
+    assert intent == Intent.MODIFY_SESSION
+
+
+def test_hybrid_intent_keeps_rule_result_when_llm_confidence_is_low(monkeypatch):
+    monkeypatch.setattr(
+        "bot.agent.intent.classify_intent_with_llm",
+        lambda message: IntentClassification(
+            intent=Intent.MODIFY_SESSION,
+            confidence=0.42,
+            reason="ambiguo",
+        ),
+    )
+
+    intent = classify_intent("Tengo mancuernas hoy")
+
+    assert intent == Intent.UPDATE_PROFILE
 
 
 def test_short_confirmation_after_routine_prompt_allows_schedule_tools():

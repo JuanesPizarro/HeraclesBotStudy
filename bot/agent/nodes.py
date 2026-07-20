@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode
 
 from bot.agent.contracts import AgentResponse, Intent
-from bot.agent.intent import allowed_tools_for_intent, classify_intent_text
+from bot.agent.intent import allowed_tools_for_intent, classify_intent
 from bot.agent.prompts import build_system_prompt
 from bot.config import settings
 from bot.agent.runtime import AgentRuntimeContext, current_agent_context
@@ -476,9 +476,9 @@ def classify_intent_node(state: AgentState) -> dict:
         elif _previous_ai_requested_routine_confirmation(state):
             intent = Intent.CREATE_ROUTINE
         else:
-            intent = classify_intent_text(latest)
+            intent = classify_intent(latest)
     else:
-        intent = classify_intent_text(latest)
+        intent = classify_intent(latest)
     return {"intent": intent}
 
 
