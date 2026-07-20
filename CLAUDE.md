@@ -187,6 +187,21 @@ Peso calculado por el agente al finalizar cada sesión. PRIMARY KEY (user_id, ex
 
 `get_last_weight_for_exercise` consulta esta tabla primero; si hay un target, lo usa como `suggested_weight`. Si no, cae al último registro en `workouts`.
 
+### Identidad de ejercicios
+`exercise` funciona hoy como clave lógica en `workouts` y `progression_targets`.
+El agente y cualquier código de backend deben reutilizar el nombre canónico ya
+conocido cuando se refieran al mismo movimiento. Cambios menores de texto crean
+otra clave y separan historial/progresión.
+
+Orden de fuente canónica:
+1. `routines.routine_json` si existe.
+2. Bullets de `routines.routine_text`.
+3. Bullets activos en `session_overrides.modification` para sustituciones temporales.
+4. `progression_targets.exercise`.
+5. `workouts.exercise` como fallback legacy.
+
+Documento de desarrollo: `docs/EXERCISE_IDENTITY.md`.
+
 ### Estrategia de progresión (doble progresión)
 Al finalizar la sesión, el agente NO sube peso como primera palanca. Orden estricto:
 1. Reps dentro del rango objetivo (si no tocó el techo con RPE 6-8).
@@ -289,6 +304,11 @@ docker compose up --build
   - Se persiste en `progression_targets`; la próxima sesión ya lleva el peso progresado
 
 ### Pendiente
+- [ ] **API móvil v1**
+  - Crear `bot/handlers/mobile_api.py` con `APIRouter(prefix="/api/v1")`
+  - Implementar contratos de `docs/MOBILE_API_V1.md`
+  - Mantener `/api/session/*` como API web legacy hasta migrar la app actual
+  - Tests de auth, plan de sesión, guardado de sets y finish idempotente
 - [ ] Recordatorios inteligentes con n8n
   - Endpoint `POST /webhook/n8n/daily-reminder` que filtra usuarios con entrenamiento hoy
   - Mensaje personalizado con bloque de sesión + override si aplica

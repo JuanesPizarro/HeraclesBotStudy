@@ -26,6 +26,7 @@ sets, adjusting reps, consolidating, or marking data as insufficient.
 The backend owns safety, validity and persistence. It validates:
 
 - exercise names must match exercises completed in the session
+- exercise names must use the canonical name already known for that movement
 - duplicate decisions are ignored
 - weights must use available increments
 - pain reports block load or volume increases
@@ -35,6 +36,12 @@ The backend owns safety, validity and persistence. It validates:
 - excessive weight reductions are rejected
 
 If a decision fails validation, that exercise uses the deterministic fallback.
+
+Exercise names are persistence keys in `progression_targets` and `workouts`.
+The agent must not rename an exercise casually. When it refers to a known
+movement, it should reuse the canonical name from the active routine,
+temporary override, progression target or workout history. See
+`docs/EXERCISE_IDENTITY.md`.
 
 ## Deterministic Fallback
 

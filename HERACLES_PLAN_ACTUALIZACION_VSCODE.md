@@ -934,20 +934,24 @@ Antes de exponer escrituras mediante MCP deben existir permisos, identidad, audi
 
 # 11. Checklist antes de comenzar la app móvil
 
-- [ ] Herramientas sin `user_id` controlado por el modelo.
-- [ ] Pruebas automatizadas estables.
-- [ ] Progresión determinista.
-- [ ] Rutinas estructuradas.
-- [ ] Confirmación y reversión de cambios.
-- [ ] Sesiones con ID y estados.
-- [ ] Finalización idempotente.
-- [ ] Respuestas Pydantic.
-- [ ] Prompt independiente de Telegram.
-- [ ] Servicio de agente reutilizable por API.
-- [ ] UUID interno independiente del proveedor de acceso.
-- [ ] PostgreSQL y migraciones.
-- [ ] Checkpointer persistente.
-- [ ] Logs, métricas y evaluaciones.
+- [x] Herramientas sin `user_id` controlado por el modelo.
+- [x] Pruebas automatizadas estables.
+- [x] Progresión determinista.
+- [x] Rutinas estructuradas.
+- [x] Confirmación y reversión de cambios.
+- [x] Sesiones con ID y estados.
+- [x] Finalización idempotente.
+- [x] Respuestas Pydantic.
+- [x] Prompt independiente de Telegram.
+- [x] Servicio de agente reutilizable por API.
+- [x] UUID interno independiente del proveedor de acceso.
+- [x] PostgreSQL y migraciones preparadas.
+- [ ] PostgreSQL ejecutado con credenciales reales de producción.
+- [ ] Checkpointer persistente validado en despliegue.
+- [x] Logs, métricas y evaluaciones.
+- [x] Contrato API móvil v1 documentado.
+
+Documento de continuidad: `docs/MOBILE_API_V1.md`.
 
 # 12. Orden de ejecución recomendado
 
@@ -960,7 +964,7 @@ Semana/bloque 3: Hito 4 + Hito 5
 Semana/bloque 4: Hito 6
 Semana/bloque 5: Hito 7
 Semana/bloque 6: Hito 8 y estabilización
-Después: API móvil y proyecto Expo
+Después: implementar `/api/v1` y crear proyecto Expo
 ```
 
 La duración real depende del tiempo disponible; los criterios de aceptación, y no el calendario, determinan cuándo avanzar.

@@ -16,6 +16,7 @@ from bot.config import settings
 from bot.handlers.telegram import create_telegram_app
 from bot.handlers.n8n_webhook import router as n8n_router
 from bot.handlers.web_api import router as web_router
+from bot.handlers.mobile_api import router as mobile_router
 from bot.observability import log_event, new_request_id, request_id_var
 
 logging.basicConfig(
@@ -44,6 +45,7 @@ app = FastAPI(
 # Registrar los routers
 app.include_router(n8n_router)
 app.include_router(web_router)
+app.include_router(mobile_router)
 
 
 @app.middleware("http")
