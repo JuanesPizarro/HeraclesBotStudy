@@ -113,6 +113,45 @@ def test_short_confirmation_after_routine_prompt_allows_schedule_tools():
     assert "update_training_schedule" in allowed_tools_for_intent(result["intent"])
 
 
+def test_modify_session_initial_step_requires_override_draft_tool():
+    state = {
+        "messages": [
+            HumanMessage(content="Solo tengo mancuernas para el entrenamiento de hoy")
+        ],
+        "user_id": "user-1",
+        "channel": "telegram",
+        "intent": Intent.MODIFY_SESSION,
+    }
+
+    tool_names, tool_choice = nodes._tool_names_for_agent_step(state)
+
+    assert tool_names == ["create_session_override_draft"]
+    assert tool_choice == "required"
+
+
+def test_modify_session_confirmation_requires_confirm_override_tool():
+    state = {
+        "messages": [
+            HumanMessage(content="Solo tengo mancuernas para el entrenamiento de hoy"),
+            nodes.AIMessage(
+                content=(
+                    "Borrador de modificación creado para 2026-07-20. "
+                    "ID: 8. Requiere confirmación."
+                )
+            ),
+            HumanMessage(content="si"),
+        ],
+        "user_id": "user-1",
+        "channel": "telegram",
+        "intent": Intent.MODIFY_SESSION,
+    }
+
+    tool_names, tool_choice = nodes._tool_names_for_agent_step(state)
+
+    assert tool_names == ["confirm_session_override_draft"]
+    assert tool_choice == "required"
+
+
 def test_base_prompt_has_no_telegram_formatting_or_urls():
     base = "\n".join(load_prompt(name) for name in BASE_PROMPT_FILES).lower()
 

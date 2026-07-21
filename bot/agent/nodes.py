@@ -508,6 +508,23 @@ def route_after_intent(state: AgentState) -> str:
     return "agent"
 
 
+def _tool_names_for_agent_step(state: AgentState) -> tuple[list[str], str | None]:
+    intent = state.get("intent", Intent.OUT_OF_SCOPE)
+    latest = _latest_human_message(state)
+
+    if intent == Intent.MODIFY_SESSION:
+        if _is_short_confirmation(
+            latest
+        ) and _previous_ai_requested_session_override_confirmation(state):
+            return ["confirm_session_override_draft"], "required"
+        return ["create_session_override_draft"], "required"
+
+    if intent == Intent.LIMITATION:
+        return ["create_session_override_draft"], "required"
+
+    return allowed_tools_for_intent(intent), None
+
+
 def agent_node(state: AgentState) -> dict:
     """
     Nodo principal: inyecta contexto completo y llama al LLM.
@@ -530,11 +547,13 @@ def agent_node(state: AgentState) -> dict:
     # [CONCEPTO: Message History = "memoria" del LLM]
     # El LLM es stateless — la memoria se logra enviando TODOS los mensajes
     # previos en cada llamada. LangGraph gestiona esto con el checkpointer.
-    allowed_tool_names = allowed_tools_for_intent(
-        state.get("intent", Intent.OUT_OF_SCOPE)
-    )
+    allowed_tool_names, tool_choice = _tool_names_for_agent_step(state)
     allowed_tools = [tool for tool in TOOLS if tool.name in allowed_tool_names]
-    runnable = llm.bind_tools(allowed_tools) if allowed_tools else llm
+    runnable = (
+        llm.bind_tools(allowed_tools, tool_choice=tool_choice)
+        if allowed_tools
+        else llm
+    )
     response = runnable.invoke([system] + list(state["messages"]))
 
     return {"messages": [response]}
